@@ -87,13 +87,14 @@ jobs:
           fi
           echo "No new failures relative to the pre-patch baseline."
 
-      - name: Commit verified patch
+      - name: Commit verified production patch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Do not stage workflow-file edits: the Actions token lacks workflow-write
+          # permission. Only the CI-verified production files are pushed.
           git add \
             scripts/run_benchmark.py \
-            decbench/utils/source_extract.py \
-            .github/workflows/cpp-function-identity-probe.yml
+            decbench/utils/source_extract.py
           git commit -m "fix: canonicalize benchmark function identity"
           git push origin HEAD:analysis/cpp-function-identity-probe
