@@ -33,21 +33,32 @@ jobs:
       - name: Install DecBench
         run: |
           python -m pip install --disable-pip-version-check -U pip
-          python -m pip install -e . pytest
+          python -m pip install -e . pytest pytest-cov
           g++ --version | head -1
 
       - name: Run existing C++ DWARF regression tests
+        id: baseline
+        continue-on-error: true
         run: |
           pytest -q tests/test_cpp_support.py tests/test_dwarf_abstract_origin.py
 
       - name: Reproduce name-key collision on real C++ DWARF
+        if: always()
         run: |
+          mkdir -p artifacts
           python scripts/probe_cpp_function_identity.py \
             --out artifacts/cpp-function-identity-probe.json
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cpp-function-identity-probe
           path: artifacts/cpp-function-identity-probe.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
+
+      - name: Require baseline regression tests
+        if: always() && steps.baseline.outcome != 'success'
+        run: |
+          echo "Existing C++ regression tests failed; see the baseline step above." >&2
+          exit 1
