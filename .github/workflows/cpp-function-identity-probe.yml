@@ -1,0 +1,53 @@
+name: C++ function identity probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - analysis/cpp-function-identity-probe
+    paths:
+      - scripts/probe_cpp_function_identity.py
+      - .github/workflows/cpp-function-identity-probe.yml
+      - decbench/models/decompilation.py
+      - decbench/utils/source_extract.py
+      - decbench/metrics/type_match.py
+      - decbench/utils/binfmt.py
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install DecBench
+        run: |
+          python -m pip install --disable-pip-version-check -U pip
+          python -m pip install -e . pytest
+          g++ --version | head -1
+
+      - name: Run existing C++ DWARF regression tests
+        run: |
+          pytest -q tests/test_cpp_support.py tests/test_dwarf_abstract_origin.py
+
+      - name: Reproduce name-key collision on real C++ DWARF
+        run: |
+          python scripts/probe_cpp_function_identity.py \
+            --out artifacts/cpp-function-identity-probe.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpp-function-identity-probe
+          path: artifacts/cpp-function-identity-probe.json
+          if-no-files-found: error
+          retention-days: 30
