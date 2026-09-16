@@ -8,6 +8,7 @@ on:
     paths:
       - scripts/probe_cpp_function_identity.py
       - .github/workflows/cpp-function-identity-probe.yml
+      - decbench/decompilers/raw/ghidra_raw.py
       - decbench/models/decompilation.py
       - decbench/utils/function_identity.py
       - decbench/utils/source_extract.py
