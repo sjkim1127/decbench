@@ -33,7 +33,6 @@ from pathlib import Path
 from decbench.utils import binfmt
 from decbench.utils.langs import PREPROC_EXTS, SOURCE_EXTS, strip_source_ext
 
-
 DeclHint = tuple[str, int]
 
 
@@ -264,6 +263,15 @@ def function_source_ex(
     of ``"binary_not_found"`` / ``"no_source_files"`` / ``"func_not_in_sources`` /
     ``"extract_failed"`` when ``code`` is ``None``.
     """
+    # Report/evaluation layers may carry DecBench's canonical storage key
+    # instead of the semantic source name. Decode it here so existing callers
+    # automatically get address-aware C++ source recovery.
+    if func_address is None:
+        storage_match = re.fullmatch(r"(.+)@0x([0-9a-fA-F]+)", func_name)
+        if storage_match is not None:
+            func_name = storage_match.group(1)
+            func_address = int(storage_match.group(2), 16)
+
     if binary_path is None:
         return None, "binary_not_found"
     binary_path = Path(binary_path)
