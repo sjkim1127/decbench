@@ -12,6 +12,7 @@ from decbench.models.decompilation import (
     DecompilationResult,
     DecompilerMetadata,
     FunctionDecompilation,
+    VariableInfo,
 )
 from decbench.utils.function_identity import (
     dwarf_function_identities,
@@ -161,6 +162,64 @@ def test_ghidra_function_lookup_is_address_keyed() -> None:
 
     assert set(by_address) == {0x400010, 0x400020}
     assert [by_address[address].getName() for address in sorted(by_address)] == ["same", "same"]
+
+
+def test_type_match_prefers_address_ground_truth_for_same_name(tmp_path: Path) -> None:
+    from decbench.metrics.type_match import TypeMatchMetric
+
+    result = _result(tmp_path)
+    first = FunctionDecompilation(
+        name="same",
+        address=0x1000,
+        decompiled_code="int same(int x) { return x; }",
+        variables=[VariableInfo(name="x", type="int", kind="arg", arg_index=0)],
+    )
+    second = FunctionDecompilation(
+        name="same",
+        address=0x2000,
+        decompiled_code="double same(double x) { return x; }",
+        variables=[VariableInfo(name="x", type="double", kind="arg", arg_index=0)],
+    )
+    result.add_function(first)
+    result.add_function(second)
+
+    int_gt = [
+        {
+            "name": "x",
+            "type": ["int"],
+            "rbp_offset": [],
+            "size": 4,
+            "is_arg": True,
+            "arg_index": 0,
+        }
+    ]
+    double_gt = [
+        {
+            "name": "x",
+            "type": ["double"],
+            "rbp_offset": [],
+            "size": 8,
+            "is_arg": True,
+            "arg_index": 0,
+        }
+    ]
+
+    metric = TypeMatchMetric()
+    cache_key = str(result.binary_path)
+    # The legacy name map can represent only one of these functions. Keep the
+    # int variant there deliberately; the second function must use its address
+    # oracle or it will score as the wrong type.
+    metric._ground_truth_cache[cache_key] = {"same": int_gt}
+    metric._ground_truth_address_cache[cache_key] = {
+        0x1000: int_gt,
+        0x2000: double_gt,
+    }
+
+    scored = metric.compute_for_binary(result)
+
+    assert set(scored.function_results) == {"same@0x1000", "same@0x2000"}
+    assert scored.function_results["same@0x1000"].value == 1.0
+    assert scored.function_results["same@0x2000"].value == 1.0
 
 
 needs_gxx = pytest.mark.skipif(shutil.which("g++") is None, reason="needs g++")
