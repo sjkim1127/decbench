@@ -32,7 +32,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,7 +46,7 @@ jobs:
       - name: Install DecBench
         run: |
           python -m pip install --disable-pip-version-check -U pip
-          python -m pip install -e . pytest pytest-cov
+          python -m pip install -e . pytest pytest-cov ruff
           g++ --version | head -1
 
       - name: Compile touched Python modules
@@ -63,6 +63,22 @@ jobs:
             decbench/utils/source_extract.py \
             decbench/metrics/type_match.py
 
+      - name: Lint touched Python files
+        run: |
+          ruff check \
+            decbench/decompilers/raw/angr_raw.py \
+            decbench/decompilers/raw/binja_raw.py \
+            decbench/decompilers/raw/dewolf_raw.py \
+            decbench/decompilers/raw/ghidra_raw.py \
+            decbench/decompilers/raw/ida_raw.py \
+            decbench/decompilers/raw/kuna_raw.py \
+            decbench/models/decompilation.py \
+            decbench/utils/function_identity.py \
+            decbench/utils/source_extract.py \
+            decbench/metrics/type_match.py \
+            tests/test_cpp_identity_backends.py \
+            tests/test_function_identity.py
+
       - name: Run identity and metric regression tests
         run: |
           pytest -q \
@@ -72,6 +88,9 @@ jobs:
             tests/test_function_identity.py \
             tests/test_metrics.py \
             tests/test_models.py
+
+      - name: Run full test suite
+        run: pytest -q
 
       - name: Verify real C++ collision fixture
         run: |
