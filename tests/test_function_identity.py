@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from decbench.models.decompilation import FunctionDecompilation
+from decbench.models.decompilation import (
+    DecompilationResult,
+    DecompilerMetadata,
+    FunctionDecompilation,
+)
 from decbench.utils.function_identity import (
     dwarf_function_identities,
     identities_by_name,
@@ -48,6 +52,14 @@ def _func(name: str, address: int) -> FunctionDecompilation:
         name=name,
         address=address,
         decompiled_code=f"int {name}(void) {{ return 0; }}",
+    )
+
+
+def _result(tmp_path: Path) -> DecompilationResult:
+    return DecompilationResult(
+        binary_path=tmp_path / "fixture",
+        binary_name="fixture",
+        decompiler=DecompilerMetadata(decompiler_name="identity-test"),
     )
 
 
@@ -91,6 +103,19 @@ def test_insert_function_replaces_same_identity_in_place() -> None:
     assert functions["foo"].decompiled_code.endswith("return 42; }")
 
 
+def test_decompilation_result_exposes_collision_safe_api(tmp_path: Path) -> None:
+    result = _result(tmp_path)
+
+    result.add_function(_func("foo", 0x1000))
+    result.add_function(_func("foo", 0x2000))
+    result.add_function(_func("bar", 0x3000))
+
+    assert result.function_count == 3
+    assert set(result.functions) == {"foo@0x1000", "foo@0x2000", "bar"}
+    assert {function.address for function in result.functions_named("foo")} == {0x1000, 0x2000}
+    assert result.functions_named("missing") == []
+
+
 needs_gxx = pytest.mark.skipif(shutil.which("g++") is None, reason="needs g++")
 
 
@@ -117,7 +142,9 @@ def test_real_cpp_dwarf_identity_does_not_collapse_overloads(tmp_path: Path) -> 
     )
 
     identities = dwarf_function_identities(binary)
-    interesting = [identity for identity in identities if identity.name in {"collide", "Next", "main"}]
+    interesting = [
+        identity for identity in identities if identity.name in {"collide", "Next", "main"}
+    ]
     grouped = identities_by_name(interesting)
 
     assert len(grouped["collide"]) == 4
@@ -129,11 +156,11 @@ def test_real_cpp_dwarf_identity_does_not_collapse_overloads(tmp_path: Path) -> 
     assert len(linkage_names) == 6
     assert len(set(linkage_names)) == 6
 
-    stored: dict[str, FunctionDecompilation] = {}
+    result = _result(tmp_path)
     for identity in interesting:
-        insert_function(stored, _func(identity.name, identity.address))
+        result.add_function(_func(identity.name, identity.address))
 
-    assert len(stored) == 7
-    assert {function.address for function in stored.values()} == {
+    assert result.function_count == 7
+    assert {function.address for function in result.functions.values()} == {
         identity.address for identity in interesting
     }
