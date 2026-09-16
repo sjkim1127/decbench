@@ -11,11 +11,13 @@ on:
       - decbench/decompilers/raw/angr_raw.py
       - decbench/decompilers/raw/binja_raw.py
       - decbench/decompilers/raw/ghidra_raw.py
+      - decbench/decompilers/raw/kuna_raw.py
       - decbench/models/decompilation.py
       - decbench/utils/function_identity.py
       - decbench/utils/source_extract.py
       - decbench/metrics/type_match.py
       - decbench/utils/binfmt.py
+      - tests/test_cpp_identity_backends.py
       - tests/test_function_identity.py
       - tests/test_cpp_support.py
       - tests/test_dwarf_abstract_origin.py
@@ -51,8 +53,10 @@ jobs:
             decbench/decompilers/raw/angr_raw.py \
             decbench/decompilers/raw/binja_raw.py \
             decbench/decompilers/raw/ghidra_raw.py \
+            decbench/decompilers/raw/kuna_raw.py \
             decbench/models/decompilation.py \
             decbench/utils/function_identity.py \
+            decbench/utils/source_extract.py \
             decbench/metrics/type_match.py
 
       - name: Run identity and metric regression tests
@@ -60,6 +64,7 @@ jobs:
           pytest -q \
             tests/test_cpp_support.py \
             tests/test_dwarf_abstract_origin.py \
+            tests/test_cpp_identity_backends.py \
             tests/test_function_identity.py \
             tests/test_metrics.py \
             tests/test_models.py
