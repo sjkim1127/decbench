@@ -1,0 +1,62 @@
+name: C++ LevelDB identity smoke
+
+on:
+  push:
+    branches:
+      - analysis/cpp-function-identity-probe
+    paths:
+      - .github/workflows/cpp-leveldb-identity-smoke.yml
+      - scripts/smoke_leveldb_cpp_identity.py
+      - scripts/run_benchmark.py
+      - decbench/utils/function_identity.py
+      - decbench/utils/source_extract.py
+      - decbench/decompilers/raw/angr_raw.py
+
+permissions:
+  contents: read
+
+jobs:
+  leveldb-real-target:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install DecBench
+        run: |
+          python -m pip install --disable-pip-version-check -U pip
+          python -m pip install -e . pytest pytest-cov
+
+      - name: Build pinned LevelDB with DWARF
+        run: |
+          git clone --depth 1 --branch 1.23 https://github.com/google/leveldb.git /tmp/leveldb
+          cmake -S /tmp/leveldb -B /tmp/leveldb/build \
+            -DCMAKE_BUILD_TYPE= \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_CXX_FLAGS='-O0 -g -fno-builtin -save-temps=obj' \
+            -DLEVELDB_BUILD_TESTS=OFF \
+            -DLEVELDB_BUILD_BENCHMARKS=OFF \
+            -DBUILD_SHARED_LIBS=ON
+          cmake --build /tmp/leveldb/build -j2
+          find /tmp/leveldb/build -type f -name 'libleveldb.so*' -print
+
+      - name: Run real-target identity smoke
+        run: |
+          binary="$(find /tmp/leveldb/build -type f -name 'libleveldb.so*' | sort | head -1)"
+          test -n "$binary"
+          python scripts/smoke_leveldb_cpp_identity.py "$binary" \
+            --json-out /tmp/leveldb-identity-smoke.json
+          cat /tmp/leveldb-identity-smoke.json
+
+      - name: Upload smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: leveldb-cpp-identity-smoke
+          path: /tmp/leveldb-identity-smoke.json
+          if-no-files-found: ignore
