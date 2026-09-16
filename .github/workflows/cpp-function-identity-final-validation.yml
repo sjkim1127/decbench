@@ -1,0 +1,100 @@
+name: C++ function identity final validation
+
+on:
+  push:
+    branches:
+      - ci/cpp-function-identity-final-validation
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --disable-pip-version-check -U pip
+          python -m pip install -e . pytest pytest-cov ruff r2pipe
+      - name: Static and focused validation
+        run: |
+          ruff check \
+            decbench/decompilers/raw/angr_raw.py \
+            decbench/decompilers/raw/binja_raw.py \
+            decbench/decompilers/raw/dewolf_raw.py \
+            decbench/decompilers/raw/ghidra_raw.py \
+            decbench/decompilers/raw/ida_raw.py \
+            decbench/decompilers/raw/kuna_raw.py \
+            decbench/metrics/base.py \
+            decbench/metrics/type_match.py \
+            decbench/models/decompilation.py \
+            decbench/utils/function_identity.py \
+            decbench/utils/source_extract.py \
+            scripts/run_benchmark.py \
+            tests/test_cpp_identity_backends.py \
+            tests/test_cpp_identity_deep_validation.py \
+            tests/test_cpp_identity_thumb.py \
+            tests/test_function_identity.py \
+            tests/test_metric_function_identity.py \
+            tests/test_run_benchmark_identity.py
+          git diff --check origin/main...HEAD
+          pytest -q \
+            tests/test_cpp_identity_deep_validation.py \
+            tests/test_run_benchmark_identity.py \
+            tests/test_function_identity.py \
+            tests/test_metric_function_identity.py \
+            tests/test_cpp_identity_backends.py
+      - name: Capture main full-suite baseline
+        run: |
+          git worktree add --detach /tmp/decbench-main origin/main
+          python -m pip install --no-deps -e /tmp/decbench-main
+          set +e
+          (cd /tmp/decbench-main && COLUMNS=200 pytest -q --tb=short) | tee /tmp/main.log
+          main_rc=${PIPESTATUS[0]}
+          set -e
+          grep '^FAILED ' /tmp/main.log | awk '{print $2}' | sort -u > /tmp/main.failures || true
+          echo "main pytest rc=$main_rc"
+          cat /tmp/main.failures || true
+      - name: Candidate full suite introduces no failures
+        run: |
+          python -m pip install --no-deps -e .
+          set +e
+          COLUMNS=200 pytest -q --tb=short | tee /tmp/candidate.log
+          candidate_rc=${PIPESTATUS[0]}
+          set -e
+          grep '^FAILED ' /tmp/candidate.log | awk '{print $2}' | sort -u > /tmp/candidate.failures || true
+          comm -13 /tmp/main.failures /tmp/candidate.failures > /tmp/new.failures
+          echo "candidate pytest rc=$candidate_rc"
+          cat /tmp/candidate.failures || true
+          if [ -s /tmp/new.failures ]; then
+            echo "New failures relative to main:"
+            cat /tmp/new.failures
+            exit 1
+          fi
+          echo "Candidate introduces no new full-suite failures relative to main."
+
+  arm-thumb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi
+          python -m pip install --disable-pip-version-check -U pip
+          python -m pip install -e . pytest pytest-cov
+      - name: Run Thumb identity regressions
+        run: pytest -q tests/test_arm_thumb_extraction.py tests/test_cpp_identity_thumb.py
