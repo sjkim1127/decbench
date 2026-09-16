@@ -33,6 +33,9 @@ jobs:
           python -m pip install -e . pytest pytest-cov ruff
           g++ --version | head -1
 
+      - name: Normalize touched imports
+        run: ruff check --fix --select I001 decbench/utils/source_extract.py
+
       - name: Static validation
         run: |
           python -m py_compile \
