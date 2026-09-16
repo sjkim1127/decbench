@@ -1,0 +1,31 @@
+name: C++ function identity ICF probe
+
+on:
+  push:
+    branches:
+      - ci/cpp-function-identity-icf-probe
+
+permissions:
+  contents: read
+
+jobs:
+  icf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install lld and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lld
+          ld.lld --version
+          python -m pip install --disable-pip-version-check -U pip
+          python -m pip install -e . pytest pytest-cov ruff
+      - name: Validate real linker ICF identity
+        run: |
+          ruff check tests/test_cpp_identity_icf_probe.py
+          pytest -q tests/test_cpp_identity_icf_probe.py
