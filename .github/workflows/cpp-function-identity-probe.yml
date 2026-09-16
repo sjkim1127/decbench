@@ -9,9 +9,11 @@ on:
       - scripts/probe_cpp_function_identity.py
       - .github/workflows/cpp-function-identity-probe.yml
       - decbench/models/decompilation.py
+      - decbench/utils/function_identity.py
       - decbench/utils/source_extract.py
       - decbench/metrics/type_match.py
       - decbench/utils/binfmt.py
+      - tests/test_function_identity.py
 
 permissions:
   contents: read
@@ -36,11 +38,14 @@ jobs:
           python -m pip install -e . pytest pytest-cov
           g++ --version | head -1
 
-      - name: Run existing C++ DWARF regression tests
+      - name: Run C++ DWARF and identity regression tests
         id: baseline
         continue-on-error: true
         run: |
-          pytest -q tests/test_cpp_support.py tests/test_dwarf_abstract_origin.py
+          pytest -q \
+            tests/test_cpp_support.py \
+            tests/test_dwarf_abstract_origin.py \
+            tests/test_function_identity.py
 
       - name: Reproduce name-key collision on real C++ DWARF
         if: always()
@@ -57,8 +62,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Require baseline regression tests
+      - name: Require regression tests
         if: always() && steps.baseline.outcome != 'success'
         run: |
-          echo "Existing C++ regression tests failed; see the baseline step above." >&2
+          echo "C++ regression tests failed; see the baseline step above." >&2
           exit 1
