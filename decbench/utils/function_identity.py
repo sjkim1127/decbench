@@ -20,9 +20,10 @@ example ``main`` normally has no C++ linkage name).
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import MutableMapping, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
 from decbench.utils import binfmt
 
