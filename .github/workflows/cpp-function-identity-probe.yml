@@ -8,6 +8,8 @@ on:
     paths:
       - scripts/probe_cpp_function_identity.py
       - .github/workflows/cpp-function-identity-probe.yml
+      - decbench/decompilers/raw/angr_raw.py
+      - decbench/decompilers/raw/binja_raw.py
       - decbench/decompilers/raw/ghidra_raw.py
       - decbench/models/decompilation.py
       - decbench/utils/function_identity.py
@@ -42,6 +44,16 @@ jobs:
           python -m pip install --disable-pip-version-check -U pip
           python -m pip install -e . pytest pytest-cov
           g++ --version | head -1
+
+      - name: Compile touched Python modules
+        run: |
+          python -m py_compile \
+            decbench/decompilers/raw/angr_raw.py \
+            decbench/decompilers/raw/binja_raw.py \
+            decbench/decompilers/raw/ghidra_raw.py \
+            decbench/models/decompilation.py \
+            decbench/utils/function_identity.py \
+            decbench/metrics/type_match.py
 
       - name: Run identity and metric regression tests
         run: |
