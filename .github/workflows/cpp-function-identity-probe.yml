@@ -18,7 +18,7 @@ on:
       - tests/test_function_identity.py
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   probe:
@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
+          persist-credentials: true
 
       - uses: actions/setup-python@v5
         with:
@@ -47,8 +47,6 @@ jobs:
             --output artifacts/type_match.py
 
       - name: Run C++ DWARF and identity regression tests
-        id: baseline
-        continue-on-error: true
         run: |
           pytest -q \
             tests/test_cpp_support.py \
@@ -56,24 +54,27 @@ jobs:
             tests/test_function_identity.py
 
       - name: Reproduce name-key collision on real C++ DWARF
-        if: always()
         run: |
-          mkdir -p artifacts
           python scripts/probe_cpp_function_identity.py \
             --out artifacts/cpp-function-identity-probe.json
 
+      - name: Commit validated TypeMatch source to analysis branch
+        run: |
+          if git diff --quiet -- decbench/metrics/type_match.py; then
+            echo "type_match.py already finalized"
+            exit 0
+          fi
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
+          git add decbench/metrics/type_match.py
+          git commit -m "type-match: join C++ ground truth by function address [skip ci]"
+          git push origin HEAD:analysis/cpp-function-identity-probe
+
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: cpp-function-identity-probe
           path: |
             artifacts/cpp-function-identity-probe.json
             artifacts/type_match.py
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
-
-      - name: Require regression tests
-        if: always() && steps.baseline.outcome != 'success'
-        run: |
-          echo "C++ regression tests failed; see the baseline step above." >&2
-          exit 1
