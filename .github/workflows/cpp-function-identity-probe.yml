@@ -7,7 +7,6 @@ on:
       - analysis/cpp-function-identity-probe
     paths:
       - scripts/probe_cpp_function_identity.py
-      - scripts/dev_patch_type_match_identity.py
       - .github/workflows/cpp-function-identity-probe.yml
       - decbench/decompilers/raw/ghidra_raw.py
       - decbench/models/decompilation.py
@@ -16,18 +15,22 @@ on:
       - decbench/metrics/type_match.py
       - decbench/utils/binfmt.py
       - tests/test_function_identity.py
+      - tests/test_cpp_support.py
+      - tests/test_dwarf_abstract_origin.py
+      - tests/test_metrics.py
+      - tests/test_models.py
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: true
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -40,41 +43,24 @@ jobs:
           python -m pip install -e . pytest pytest-cov
           g++ --version | head -1
 
-      - name: Apply staged TypeMatch identity patch
-        run: |
-          mkdir -p artifacts
-          python scripts/dev_patch_type_match_identity.py \
-            --output artifacts/type_match.py
-
-      - name: Run C++ DWARF and identity regression tests
+      - name: Run identity and metric regression tests
         run: |
           pytest -q \
             tests/test_cpp_support.py \
             tests/test_dwarf_abstract_origin.py \
-            tests/test_function_identity.py
+            tests/test_function_identity.py \
+            tests/test_metrics.py \
+            tests/test_models.py
 
-      - name: Reproduce name-key collision on real C++ DWARF
+      - name: Verify real C++ collision fixture
         run: |
+          mkdir -p artifacts
           python scripts/probe_cpp_function_identity.py \
             --out artifacts/cpp-function-identity-probe.json
-
-      - name: Commit validated TypeMatch source to analysis branch
-        run: |
-          if git diff --quiet -- decbench/metrics/type_match.py; then
-            echo "type_match.py already finalized"
-            exit 0
-          fi
-          git config user.name "${GITHUB_ACTOR}"
-          git config user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
-          git add decbench/metrics/type_match.py
-          git commit -m "type-match: join C++ ground truth by function address [skip ci]"
-          git push origin HEAD:analysis/cpp-function-identity-probe
 
       - uses: actions/upload-artifact@v4
         with:
           name: cpp-function-identity-probe
-          path: |
-            artifacts/cpp-function-identity-probe.json
-            artifacts/type_match.py
+          path: artifacts/cpp-function-identity-probe.json
           if-no-files-found: error
           retention-days: 30
