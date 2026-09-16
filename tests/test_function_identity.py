@@ -116,6 +116,53 @@ def test_decompilation_result_exposes_collision_safe_api(tmp_path: Path) -> None
     assert result.functions_named("missing") == []
 
 
+def test_ghidra_function_lookup_is_address_keyed() -> None:
+    from decbench.decompilers.raw.ghidra_raw import RawGhidraDecompiler
+
+    class Address:
+        def __init__(self, offset: int):
+            self.offset = offset
+
+        def getOffset(self) -> int:
+            return self.offset
+
+    class Function:
+        def __init__(self, name: str, offset: int):
+            self.name = name
+            self.address = Address(offset)
+
+        def getName(self) -> str:
+            return self.name
+
+        def getEntryPoint(self) -> Address:
+            return self.address
+
+    class FunctionManager:
+        def __init__(self, functions):
+            self.functions = functions
+
+        def getFunctions(self, _forward: bool):
+            return list(self.functions)
+
+    class Program:
+        def __init__(self):
+            self.base = Address(0x1000)
+            self.manager = FunctionManager(
+                [Function("same", 0x1010), Function("same", 0x1020)]
+            )
+
+        def getImageBase(self) -> Address:
+            return self.base
+
+        def getFunctionManager(self) -> FunctionManager:
+            return self.manager
+
+    by_address = RawGhidraDecompiler._functions_by_address(Program(), elf_base=0x400000)
+
+    assert set(by_address) == {0x400010, 0x400020}
+    assert [by_address[address].getName() for address in sorted(by_address)] == ["same", "same"]
+
+
 needs_gxx = pytest.mark.skipif(shutil.which("g++") is None, reason="needs g++")
 
 
