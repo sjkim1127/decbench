@@ -118,7 +118,10 @@ class DecompilationResult(BaseModel):
 
     functions: dict[str, FunctionDecompilation] = Field(
         default_factory=dict,
-        description="Decompilation results keyed by function name",
+        description=(
+            "Decompilation results keyed by plain function name while unique; "
+            "same-name/different-address collisions may use an address-qualified key"
+        ),
     )
 
     combined_source: str | None = Field(
@@ -138,6 +141,23 @@ class DecompilationResult(BaseModel):
     @property
     def successful_count(self) -> int:
         return len(self.functions) - len(self.decompiler.failed_functions)
+
+    def add_function(self, function: FunctionDecompilation) -> str:
+        """Insert one function without collapsing a C++ name collision.
+
+        Non-colliding functions keep the historical plain-name key. If another
+        function with the same name but a different address is inserted, all
+        colliding entries are re-keyed with their binary-local addresses.
+
+        Returns the storage key used for ``function``.
+        """
+        from decbench.utils.function_identity import insert_function
+
+        return insert_function(self.functions, function)
+
+    def functions_named(self, name: str) -> list[FunctionDecompilation]:
+        """Return every stored function whose semantic name equals ``name``."""
+        return [function for function in self.functions.values() if function.name == name]
 
     def to_c_file(self, path: Path) -> None:
         """Write combined decompilation to a C file."""
@@ -178,7 +198,7 @@ class DecompilationResult(BaseModel):
 
     @classmethod
     def from_toml(cls, path: Path) -> DecompilationResult:
-        """Load decompilation result from TOML (metadata only)."""
+        """Load decompilation result metadata from TOML (metadata only)."""
         import toml
 
         data = toml.load(path)
