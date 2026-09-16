@@ -7,6 +7,7 @@ on:
       - analysis/cpp-function-identity-probe
     paths:
       - scripts/probe_cpp_function_identity.py
+      - scripts/dev_patch_type_match_identity.py
       - .github/workflows/cpp-function-identity-probe.yml
       - decbench/decompilers/raw/ghidra_raw.py
       - decbench/models/decompilation.py
@@ -39,6 +40,12 @@ jobs:
           python -m pip install -e . pytest pytest-cov
           g++ --version | head -1
 
+      - name: Apply staged TypeMatch identity patch
+        run: |
+          mkdir -p artifacts
+          python scripts/dev_patch_type_match_identity.py \
+            --output artifacts/type_match.py
+
       - name: Run C++ DWARF and identity regression tests
         id: baseline
         continue-on-error: true
@@ -59,7 +66,9 @@ jobs:
         if: always()
         with:
           name: cpp-function-identity-probe
-          path: artifacts/cpp-function-identity-probe.json
+          path: |
+            artifacts/cpp-function-identity-probe.json
+            artifacts/type_match.py
           if-no-files-found: warn
           retention-days: 30
 
