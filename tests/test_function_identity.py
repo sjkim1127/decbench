@@ -21,7 +21,6 @@ from decbench.utils.function_identity import (
 )
 from decbench.utils.source_extract import function_source_ex
 
-
 CPP_COLLISIONS = r"""
 namespace alpha {
 __attribute__((noinline)) int collide(int x) { return x + 1; }
@@ -283,7 +282,9 @@ def test_source_extraction_uses_address_to_distinguish_overloads(tmp_path: Path)
     ]
 
     int_global = next(identity for identity in identities if identity.linkage_name == "_Z7collidei")
-    double_global = next(identity for identity in identities if identity.linkage_name == "_Z7collided")
+    double_global = next(
+        identity for identity in identities if identity.linkage_name == "_Z7collided"
+    )
 
     int_source, int_status = function_source_ex(binary, "collide", int_global.address)
     double_source, double_status = function_source_ex(binary, "collide", double_global.address)

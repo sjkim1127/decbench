@@ -169,7 +169,11 @@ class RawKunaDecompiler(Decompiler):
         )
         if functions is not None:
             requested_addrs = {address for (_name, address) in functions}
-            enumerated = [(name, address) for name, address in enumerated if address in requested_addrs]
+            enumerated = [
+                (name, address)
+                for name, address in enumerated
+                if address in requested_addrs
+            ]
         enumerated = common.narrow_to_source(
             enumerated, function_names, backend="kuna", binary_name=binary_path.name
         )
