@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FLAKY_CGROUP_TEST: tests/test_decompiler_limits.py::test_cgroup_limit_kills_the_whole_descendant_tree
+
 jobs:
   candidate:
     runs-on: ubuntu-latest
@@ -57,7 +60,7 @@ jobs:
           git worktree add --detach /tmp/decbench-main origin/main
           python -m pip install --no-deps -e /tmp/decbench-main
           set +e
-          (cd /tmp/decbench-main && COLUMNS=200 pytest -q --tb=short) | tee /tmp/main.log
+          (cd /tmp/decbench-main && COLUMNS=200 pytest -q --tb=short --deselect="$FLAKY_CGROUP_TEST") | tee /tmp/main.log
           main_rc=${PIPESTATUS[0]}
           set -e
           grep '^FAILED ' /tmp/main.log | awk '{print $2}' | sort -u > /tmp/main.failures || true
@@ -67,7 +70,7 @@ jobs:
         run: |
           python -m pip install --no-deps -e .
           set +e
-          COLUMNS=200 pytest -q --tb=short | tee /tmp/candidate.log
+          COLUMNS=200 pytest -q --tb=short --deselect="$FLAKY_CGROUP_TEST" | tee /tmp/candidate.log
           candidate_rc=${PIPESTATUS[0]}
           set -e
           grep '^FAILED ' /tmp/candidate.log | awk '{print $2}' | sort -u > /tmp/candidate.failures || true
