@@ -17,8 +17,10 @@ from decbench.models.decompilation import (
 )
 from decbench.models.function_data import BinaryGroup, FunctionData, FunctionRecord
 from decbench.scoring.scoreboard import build_scoreboard_from_function_data
-from decbench.utils.function_identity import dwarf_function_identities, identities_by_name
-
+from decbench.utils.function_identity import (
+    dwarf_function_identities,
+    identities_by_name,
+)
 
 CPP = r"""
 namespace alpha { __attribute__((noinline)) int collide(int x) { return x + 1; } }
@@ -130,8 +132,14 @@ def test_same_address_different_name_aliases_do_not_collapse() -> None:
     from decbench.utils.function_identity import insert_function
 
     functions: dict[str, FunctionDecompilation] = {}
-    insert_function(functions, FunctionDecompilation(name="foo", address=0x1000, decompiled_code="a"))
-    insert_function(functions, FunctionDecompilation(name="bar", address=0x1000, decompiled_code="b"))
+    insert_function(
+        functions,
+        FunctionDecompilation(name="foo", address=0x1000, decompiled_code="a"),
+    )
+    insert_function(
+        functions,
+        FunctionDecompilation(name="bar", address=0x1000, decompiled_code="b"),
+    )
     assert set(functions) == {"foo", "bar"}
     assert {fd.name for fd in functions.values()} == {"foo", "bar"}
 
