@@ -24,14 +24,25 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Apply patch
-        run: python scripts/apply_canonical_identity_patch.py
-
       - name: Install test dependencies
         run: |
           python -m pip install --disable-pip-version-check -U pip
-          python -m pip install -e . pytest pytest-cov ruff
+          python -m pip install -e . pytest pytest-cov ruff r2pipe
           g++ --version | head -1
+
+      - name: Capture pre-patch full-suite baseline
+        run: |
+          set +e
+          COLUMNS=200 pytest -q --tb=short | tee /tmp/baseline.log
+          echo "${PIPESTATUS[0]}" > /tmp/baseline.rc
+          set -e
+          grep '^FAILED ' /tmp/baseline.log | awk '{print $2}' | sort -u > /tmp/baseline.failures || true
+          echo "baseline pytest rc=$(cat /tmp/baseline.rc)"
+          echo "baseline failures:"
+          cat /tmp/baseline.failures || true
+
+      - name: Apply patch
+        run: python scripts/apply_canonical_identity_patch.py
 
       - name: Normalize touched imports
         run: ruff check --fix --select I001 decbench/utils/source_extract.py
@@ -58,8 +69,23 @@ jobs:
             tests/test_metrics.py \
             tests/test_models.py
 
-      - name: Full test suite
-        run: pytest -q
+      - name: Full suite must introduce no new failures
+        run: |
+          set +e
+          COLUMNS=200 pytest -q --tb=short | tee /tmp/patched.log
+          patched_rc=${PIPESTATUS[0]}
+          set -e
+          grep '^FAILED ' /tmp/patched.log | awk '{print $2}' | sort -u > /tmp/patched.failures || true
+          comm -13 /tmp/baseline.failures /tmp/patched.failures > /tmp/new.failures
+          echo "patched pytest rc=$patched_rc"
+          echo "patched failures:"
+          cat /tmp/patched.failures || true
+          if [ -s /tmp/new.failures ]; then
+            echo "New failures introduced by canonical identity patch:"
+            cat /tmp/new.failures
+            exit 1
+          fi
+          echo "No new failures relative to the pre-patch baseline."
 
       - name: Commit verified patch
         run: |
