@@ -19,6 +19,7 @@ from decbench.utils.function_identity import (
     identities_by_name,
     insert_function,
 )
+from decbench.utils.source_extract import function_source_ex
 
 
 CPP_COLLISIONS = r"""
@@ -62,6 +63,29 @@ def _result(tmp_path: Path) -> DecompilationResult:
         binary_name="fixture",
         decompiler=DecompilerMetadata(decompiler_name="identity-test"),
     )
+
+
+def _compile_collision_fixture(tmp_path: Path) -> Path:
+    source = tmp_path / "identity_collision.cpp"
+    binary = tmp_path / "identity_collision"
+    source.write_text(CPP_COLLISIONS)
+    subprocess.run(
+        [
+            "g++",
+            "-std=c++17",
+            "-O0",
+            "-g",
+            "-fno-inline",
+            "-fno-builtin",
+            str(source),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return binary
 
 
 def test_insert_function_preserves_legacy_key_until_collision() -> None:
@@ -206,9 +230,6 @@ def test_type_match_prefers_address_ground_truth_for_same_name(tmp_path: Path) -
 
     metric = TypeMatchMetric()
     cache_key = str(result.binary_path)
-    # The legacy name map can represent only one of these functions. Keep the
-    # int variant there deliberately; the second function must use its address
-    # oracle or it will score as the wrong type.
     metric._ground_truth_cache[cache_key] = {"same": int_gt}
     metric._ground_truth_address_cache[cache_key] = {
         0x1000: int_gt,
@@ -227,25 +248,7 @@ needs_gxx = pytest.mark.skipif(shutil.which("g++") is None, reason="needs g++")
 
 @needs_gxx
 def test_real_cpp_dwarf_identity_does_not_collapse_overloads(tmp_path: Path) -> None:
-    source = tmp_path / "identity_collision.cpp"
-    binary = tmp_path / "identity_collision"
-    source.write_text(CPP_COLLISIONS)
-    subprocess.run(
-        [
-            "g++",
-            "-std=c++17",
-            "-O0",
-            "-g",
-            "-fno-inline",
-            "-fno-builtin",
-            str(source),
-            "-o",
-            str(binary),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    binary = _compile_collision_fixture(tmp_path)
 
     identities = dwarf_function_identities(binary)
     interesting = [
@@ -270,3 +273,23 @@ def test_real_cpp_dwarf_identity_does_not_collapse_overloads(tmp_path: Path) -> 
     assert {function.address for function in result.functions.values()} == {
         identity.address for identity in interesting
     }
+
+
+@needs_gxx
+def test_source_extraction_uses_address_to_distinguish_overloads(tmp_path: Path) -> None:
+    binary = _compile_collision_fixture(tmp_path)
+    identities = [
+        identity for identity in dwarf_function_identities(binary) if identity.name == "collide"
+    ]
+
+    int_global = next(identity for identity in identities if identity.linkage_name == "_Z7collidei")
+    double_global = next(identity for identity in identities if identity.linkage_name == "_Z7collided")
+
+    int_source, int_status = function_source_ex(binary, "collide", int_global.address)
+    double_source, double_status = function_source_ex(binary, "collide", double_global.address)
+
+    assert int_status == ""
+    assert double_status == ""
+    assert int_source is not None and "collide(int x)" in int_source
+    assert double_source is not None and "collide(double x)" in double_source
+    assert int_source != double_source
