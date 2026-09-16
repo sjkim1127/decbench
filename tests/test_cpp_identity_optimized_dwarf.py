@@ -61,7 +61,10 @@ def test_o2_inlined_dwarf_does_not_confuse_concrete_same_name_identity(tmp_path:
             for die in cu.iter_DIEs():
                 if die.tag == "DW_TAG_inlined_subroutine":
                     inlined += 1
-                if "DW_AT_abstract_origin" in die.attributes or "DW_AT_specification" in die.attributes:
+                if (
+                    "DW_AT_abstract_origin" in die.attributes
+                    or "DW_AT_specification" in die.attributes
+                ):
                     referenced += 1
     assert inlined > 0
     assert referenced > 0
