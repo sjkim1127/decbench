@@ -24,10 +24,18 @@ def test_partial_progress_pickle_preserves_collision_keys_and_semantics(tmp_path
         ),
     )
     result.add_function(
-        FunctionDecompilation(name="same", address=0x1000, decompiled_code="int a(void) { return 1; }")
+        FunctionDecompilation(
+            name="same",
+            address=0x1000,
+            decompiled_code="int a(void) { return 1; }",
+        )
     )
     result.add_function(
-        FunctionDecompilation(name="same", address=0x2000, decompiled_code="int b(void) { return 2; }")
+        FunctionDecompilation(
+            name="same",
+            address=0x2000,
+            decompiled_code="int b(void) { return 2; }",
+        )
     )
 
     progress = tmp_path / "progress.pkl"
