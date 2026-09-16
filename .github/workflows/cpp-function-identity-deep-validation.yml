@@ -24,12 +24,20 @@ jobs:
           python -m pip install -e . pytest pytest-cov ruff
       - name: Static checks
         run: |
-          ruff check tests/test_cpp_identity_deep_validation.py
-          python -m py_compile tests/test_cpp_identity_deep_validation.py
+          ruff check \
+            tests/test_cpp_identity_deep_validation.py \
+            tests/test_cpp_identity_optimized_dwarf.py \
+            tests/test_cpp_identity_progress.py
+          python -m py_compile \
+            tests/test_cpp_identity_deep_validation.py \
+            tests/test_cpp_identity_optimized_dwarf.py \
+            tests/test_cpp_identity_progress.py
       - name: Deep identity regressions
         run: |
           pytest -q \
             tests/test_cpp_identity_deep_validation.py \
+            tests/test_cpp_identity_optimized_dwarf.py \
+            tests/test_cpp_identity_progress.py \
             tests/test_run_benchmark_identity.py \
             tests/test_function_identity.py \
             tests/test_metric_function_identity.py \
