@@ -10,6 +10,7 @@ on:
       - .github/workflows/cpp-function-identity-probe.yml
       - decbench/decompilers/raw/angr_raw.py
       - decbench/decompilers/raw/binja_raw.py
+      - decbench/decompilers/raw/dewolf_raw.py
       - decbench/decompilers/raw/ghidra_raw.py
       - decbench/decompilers/raw/ida_raw.py
       - decbench/decompilers/raw/kuna_raw.py
@@ -53,6 +54,7 @@ jobs:
           python -m py_compile \
             decbench/decompilers/raw/angr_raw.py \
             decbench/decompilers/raw/binja_raw.py \
+            decbench/decompilers/raw/dewolf_raw.py \
             decbench/decompilers/raw/ghidra_raw.py \
             decbench/decompilers/raw/ida_raw.py \
             decbench/decompilers/raw/kuna_raw.py \
