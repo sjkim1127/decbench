@@ -1,0 +1,97 @@
+name: C++ function identity end-to-end validation
+
+on:
+  push:
+    branches:
+      - ci/cpp-function-identity-end-to-end
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --disable-pip-version-check -U pip
+          python -m pip install -e . pytest pytest-cov ruff r2pipe
+      - name: Apply end-to-end identity patch
+        run: python scripts/apply_cpp_identity_end_to_end_patch.py
+      - name: Static validation
+        run: |
+          ruff check \
+            decbench/models/decompilation.py \
+            decbench/metrics/byte_match.py \
+            decbench/scoring/report_extras.py \
+            tests/test_cpp_identity_end_to_end.py
+          python -m py_compile \
+            decbench/models/decompilation.py \
+            decbench/metrics/byte_match.py \
+            decbench/scoring/report_extras.py \
+            tests/test_cpp_identity_end_to_end.py
+          git diff --check
+      - name: Focused identity regressions
+        run: |
+          pytest -q \
+            tests/test_cpp_identity_end_to_end.py \
+            tests/test_cpp_identity_deep_validation.py \
+            tests/test_cpp_identity_optimized_dwarf.py \
+            tests/test_cpp_identity_progress.py \
+            tests/test_run_benchmark_identity.py \
+            tests/test_function_identity.py \
+            tests/test_metric_function_identity.py \
+            tests/test_cpp_identity_backends.py
+      - name: Capture main full-suite baseline
+        run: |
+          git worktree add --detach /tmp/decbench-main origin/main
+          python -m pip install --no-deps -e /tmp/decbench-main
+          set +e
+          (cd /tmp/decbench-main && COLUMNS=200 pytest -q --tb=short \
+            -k 'not test_cgroup_limit_kills_the_whole_descendant_tree') | tee /tmp/main.log
+          main_rc=${PIPESTATUS[0]}
+          set -e
+          grep '^FAILED ' /tmp/main.log | awk '{print $2}' | sort -u > /tmp/main.failures || true
+          echo "main pytest rc=$main_rc"
+          cat /tmp/main.failures || true
+      - name: Candidate full suite introduces no failures
+        run: |
+          python -m pip install --no-deps -e .
+          set +e
+          COLUMNS=200 pytest -q --tb=short \
+            -k 'not test_cgroup_limit_kills_the_whole_descendant_tree' | tee /tmp/candidate.log
+          candidate_rc=${PIPESTATUS[0]}
+          set -e
+          grep '^FAILED ' /tmp/candidate.log | awk '{print $2}' | sort -u > /tmp/candidate.failures || true
+          comm -13 /tmp/main.failures /tmp/candidate.failures > /tmp/new.failures
+          echo "candidate pytest rc=$candidate_rc"
+          cat /tmp/candidate.failures || true
+          if [ -s /tmp/new.failures ]; then
+            echo "New failures relative to main:"
+            cat /tmp/new.failures
+            exit 1
+          fi
+          echo "Candidate introduces no new full-suite failures relative to main."
+      - name: Commit verified production patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            decbench/models/decompilation.py \
+            decbench/metrics/byte_match.py \
+            decbench/scoring/report_extras.py \
+            tests/test_cpp_identity_end_to_end.py
+          if git diff --cached --quiet; then
+            echo "No production changes to commit."
+            exit 0
+          fi
+          git commit -m "fix: preserve C++ identity through artifacts and reports [skip ci]"
+          git push origin HEAD:ci/cpp-function-identity-end-to-end
