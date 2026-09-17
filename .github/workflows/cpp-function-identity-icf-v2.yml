@@ -1,0 +1,53 @@
+name: C++ function identity ICF v2 validation
+
+on:
+  push:
+    branches:
+      - ci/cpp-function-identity-icf-v2
+
+permissions:
+  contents: write
+
+jobs:
+  icf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install lld and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lld
+          ld.lld --version
+          python -m pip install --disable-pip-version-check -U pip
+          python -m pip install -e . pytest pytest-cov ruff
+      - name: Apply concrete-address guard
+        run: python scripts/apply_icf_identity_fix.py
+      - name: Static validation
+        run: |
+          ruff check decbench/utils/binfmt.py decbench/utils/function_identity.py tests/test_cpp_identity_icf_v2.py
+          python -m py_compile decbench/utils/binfmt.py decbench/utils/function_identity.py tests/test_cpp_identity_icf_v2.py
+          git diff --check
+      - name: Validate ICF and existing identity regressions
+        run: |
+          pytest -q \
+            tests/test_cpp_identity_icf_v2.py \
+            tests/test_function_identity.py \
+            tests/test_cpp_identity_deep_validation.py \
+            tests/test_cpp_identity_optimized_dwarf.py
+      - name: Commit verified production patch
+        if: success()
+        run: |
+          git config user.name 'Sung Joo Kim'
+          git config user.email 'freexxx9206@naver.com'
+          git add decbench/utils/binfmt.py decbench/utils/function_identity.py
+          if git diff --cached --quiet; then
+            echo 'No production changes to commit.'
+            exit 0
+          fi
+          git commit -m 'fix: ignore non-executable DWARF zero-address sentinels [skip ci]'
+          git push origin HEAD:ci/cpp-function-identity-icf-v2
