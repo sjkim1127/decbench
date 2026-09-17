@@ -134,12 +134,16 @@ def dwarf_function_identities(binary_path: Path) -> list[FunctionIdentity]:
             if not name:
                 continue
 
+            address = int(die.attributes["DW_AT_low_pc"].value)
+            if not binfmt.dwarf_low_pc_is_concrete(binary_path, address):
+                continue
+
             linkage = binfmt.die_str_attr(die, "DW_AT_linkage_name")
             if linkage is None:
                 linkage = binfmt.die_str_attr(die, "DW_AT_MIPS_linkage_name")
 
             identity = FunctionIdentity(
-                address=int(die.attributes["DW_AT_low_pc"].value),
+                address=address,
                 name=name,
                 linkage_name=linkage,
             )
