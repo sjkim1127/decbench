@@ -29,14 +29,20 @@ jobs:
       - name: Static validation
         run: |
           ruff check \
+            decbench/utils/function_identity.py \
             decbench/models/decompilation.py \
             decbench/metrics/byte_match.py \
             decbench/scoring/report_extras.py \
+            scripts/reeval_bytematch.py \
+            scripts/rebuild_function_data.py \
             tests/test_cpp_identity_end_to_end.py
           python -m py_compile \
+            decbench/utils/function_identity.py \
             decbench/models/decompilation.py \
             decbench/metrics/byte_match.py \
             decbench/scoring/report_extras.py \
+            scripts/reeval_bytematch.py \
+            scripts/rebuild_function_data.py \
             tests/test_cpp_identity_end_to_end.py
           git diff --check
       - name: Focused identity regressions
@@ -85,9 +91,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
+            decbench/utils/function_identity.py \
             decbench/models/decompilation.py \
             decbench/metrics/byte_match.py \
             decbench/scoring/report_extras.py \
+            scripts/reeval_bytematch.py \
+            scripts/rebuild_function_data.py \
             tests/test_cpp_identity_end_to_end.py
           if git diff --cached --quiet; then
             echo "No production changes to commit."
