@@ -12,7 +12,10 @@ from elftools.elf.elffile import ELFFile
 from decbench.utils import binfmt
 from decbench.utils.function_identity import dwarf_function_identities
 
-pytestmark = pytest.mark.skipif(shutil.which("g++") is None, reason="g++ required")
+pytestmark = pytest.mark.skipif(
+    shutil.which("g++") is None or shutil.which("ld.lld") is None,
+    reason="g++ and ld.lld required",
+)
 
 ICF_SRC = r"""
 extern "C" __attribute__((noinline)) int foo(int x) { return x + 1; }
@@ -105,17 +108,7 @@ def test_linker_icf_sentinel_zero_is_not_a_concrete_binary_target(tmp_path: Path
 def test_real_executable_address_zero_is_preserved(tmp_path: Path) -> None:
     source = tmp_path / "zero.c"
     obj = tmp_path / "zero.o"
-    script = tmp_path / "zero.ld"
-    binary = tmp_path / "zero.elf"
     source.write_text(ZERO_SRC)
-    script.write_text(
-        "SECTIONS {\n"
-        "  . = 0;\n"
-        "  .text : { *(.text .text.*) }\n"
-        "  .data : { *(.data .data.*) }\n"
-        "  .bss : { *(.bss .bss.*) }\n"
-        "}\n"
-    )
     subprocess.run(
         [
             "gcc",
@@ -134,20 +127,17 @@ def test_real_executable_address_zero_is_preserved(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    subprocess.run(
-        ["ld.lld", "-e", "zero", "-T", str(script), str(obj), "-o", str(binary)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
 
-    symbols = _symbol_addresses(binary, {"zero"})
+    # ET_REL keeps executable section addresses and symbol values section-relative.
+    # This gives us a real executable section that legitimately starts at zero,
+    # exactly the embedded/bare-metal case the sentinel guard must not discard.
+    symbols = _symbol_addresses(obj, {"zero"})
     assert symbols == {"zero": 0}
-    assert binfmt.executable_address_status(binary, 0) is True
+    assert binfmt.executable_address_status(obj, 0) is True
 
-    identities = [row for row in dwarf_function_identities(binary) if row.name == "zero"]
+    identities = [row for row in dwarf_function_identities(obj) if row.name == "zero"]
     assert len(identities) == 1
     assert identities[0].address == 0
 
-    owners = binfmt.source_function_owners(binary, {"zero"})
+    owners = binfmt.source_function_owners(obj, {"zero"})
     assert owners[0][0] == "zero"
