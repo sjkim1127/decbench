@@ -20,6 +20,7 @@ example ``main`` normally has no C++ linkage name).
 
 from __future__ import annotations
 
+import re
 from collections.abc import MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +54,19 @@ _FunctionT = TypeVar("_FunctionT", bound=_FunctionLike)
 def function_storage_key(function: _FunctionLike) -> str:
     """Collision-qualified storage key for one function."""
     return f"{function.name}@0x{function.address:x}"
+
+
+def parse_function_storage_key(storage_key: str) -> tuple[str, int | None]:
+    """Return ``(semantic_name, address)`` encoded by a benchmark storage key.
+
+    Unique functions keep the historical plain-name key and therefore return
+    ``None`` for the address. Collision-qualified keys are generated only by
+    DecBench and use ``<semantic-name>@0x<canonical-low-pc>``.
+    """
+    match = re.fullmatch(r"(.+)@0x([0-9a-fA-F]+)", storage_key)
+    if match is None:
+        return storage_key, None
+    return match.group(1), int(match.group(2), 16)
 
 
 def insert_function(

@@ -162,8 +162,8 @@ class DecompilationResult(BaseModel):
     def to_c_file(self, path: Path) -> None:
         """Write combined decompilation to a C file."""
         with open(path, "w") as f:
-            for func in self.functions.values():
-                f.write(f"// Function: {func.name} @ 0x{func.address:x}\n")
+            for storage_key, func in self.functions.items():
+                f.write(f"// Function: {storage_key} @ 0x{func.address:x}\n")
                 f.write(func.decompiled_code)
                 f.write("\n\n")
 
