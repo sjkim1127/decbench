@@ -28,6 +28,7 @@ jobs:
         run: |
           python scripts/apply_cpp_identity_end_to_end_patch.py
           python scripts/apply_cpp_identity_artifact_compat_patch.py
+          python scripts/apply_cpp_identity_report_compat_patch.py
       - name: Static validation
         run: |
           ruff check \
