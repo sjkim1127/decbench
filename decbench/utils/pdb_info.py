@@ -504,6 +504,7 @@ class PdbFunction:
     source_file: str | None = None
     source_line: int = 0
     first_source_locations: tuple[tuple[str, int], ...] = ()
+    signature_type_index: int | None = None
 
     @property
     def measurable(self) -> bool:
@@ -802,6 +803,7 @@ def read_pdb(binary_path: Path, debug_path: Path | None = None) -> PdbInfo | Non
                     files[module_index],
                     begin + dbg_start,
                     begin + dbg_end,
+                    signature_type_index=signature or None,
                 )
                 source_rows = lines[
                     bisect_left(line_pcs, begin) : bisect_left(line_pcs, begin + length)
