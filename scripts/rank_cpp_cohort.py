@@ -38,6 +38,7 @@ def rank(root: Path, output: Path) -> dict[str, Any]:
     versions: dict[str, set[str]] = defaultdict(set)
     populations: dict[str, Counter] = defaultdict(Counter)
     ledger, paths = [], []
+    capture_kinds: set[str] = set()
     seen = set()
     for done in completed:
         path = root / "cells" / (done["cell"] + ".json")
@@ -47,6 +48,7 @@ def rank(root: Path, output: Path) -> dict[str, Any]:
             raise ValueError("cell result changed")
         cell = json.loads(path.read_bytes())
         plan = json.loads(Path(plans[done["cell"]]).read_bytes())
+        capture_kinds.add(cell.get("capture_kind", "frozen_artifact"))
         expected = {r["address"] for r in plan["functions"]}
         if len(expected) != len(plan["functions"]) or cell["requested"] != len(expected):
             raise ValueError("requested address multiplicity differs")
@@ -159,6 +161,11 @@ def rank(root: Path, output: Path) -> dict[str, Any]:
             if row["union_eligible"]
             else None
         )
+    capture = "fresh metric computation on frozen producer outputs; no fresh decompilation"
+    if capture_kinds == {"fresh_address_guided_stripped"}:
+        capture = "fresh stripped producer captures and fresh metric computation"
+    elif "fresh_address_guided_stripped" in capture_kinds:
+        capture = "fresh metric computation on mixed captures; inspect per-cell provenance"
     result = {
         "profile": "cpp-common-oracle-union-v1-experimental",
         "official_score": False,
@@ -169,7 +176,7 @@ def rank(root: Path, output: Path) -> dict[str, Any]:
         "rows": rows,
         "byte_match": "unmeasured; excluded",
         "execution": "unmeasured",
-        "capture": "fresh metric computation on frozen producer outputs; no fresh decompilation",
+        "capture": capture,
     }
     output.mkdir(parents=True, exist_ok=False)
     atomic(output / "ranking.json", result)
@@ -179,7 +186,11 @@ def rank(root: Path, output: Path) -> dict[str, Any]:
     lines = [
         "# Local C++ diagnostic ranking",
         "",
-        "Fresh re-scoring of fixed producer captures. Experimental, not official DecBench.",
+        (
+            "Fresh re-scoring of fixed producer captures. Experimental, not official DecBench."
+            if capture_kinds == {"frozen_artifact"}
+            else capture.capitalize() + ". Experimental, not official DecBench."
+        ),
         "",
         "| Rank | Tool / captured version | Nonempty / requested | GED perfect / oracle | "
         "ABI perfect / oracle | Experimental Union / eligible | Union / requested |",

@@ -144,6 +144,7 @@ def evaluate(plan_path: Path, dataset: Path) -> dict[str, Any]:
         "tools": {},
         "official_score": False,
         "capture": plan.get("capture", "frozen producer artifact"),
+        "capture_kind": plan.get("capture_kind", "frozen_artifact"),
         "requested_functions": plan["functions"],
     }
     for tool in TOOLS:
@@ -235,7 +236,15 @@ def main() -> None:
         parser.error("plans-root, parser-library and dataset-revision are required")
     if args.jobs < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("positive jobs and timeout required")
+    if (args.plans_root / "INCOMPLETE").exists():
+        raise ValueError("incomplete scale projection; full population required")
     plans = sorted(args.plans_root.glob("*/plan.json"))
+    projection_path = args.plans_root / "projection.json"
+    if projection_path.exists():
+        projection = json.loads(projection_path.read_bytes())
+        observed = {str(p.resolve()): digest(p) for p in plans}
+        if observed != projection["plans"] or args.cell:
+            raise ValueError("scale projection differs or requests a partial population")
     if args.cell:
         wanted = set(args.cell)
         plans = [p for p in plans if json.loads(p.read_bytes())["cell"]["id"] in wanted]

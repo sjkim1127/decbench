@@ -28,12 +28,17 @@ jobs:
           test -f ../rust-joern/target/release/librust_joern.so
       - name: Development dependencies
         run: python -m pip install -e '.[dev]'
+      - name: Scale transport static checks
+        run: |
+          black --check decbench/utils/cpp_scale_store.py scripts/run_cpp_scale.py scripts/export_cpp_scale.py scripts/evaluate_cpp_cohort.py scripts/rank_cpp_cohort.py tests/test_cpp_scale_store.py
+          ruff check decbench/utils/cpp_scale_store.py scripts/run_cpp_scale.py scripts/export_cpp_scale.py scripts/evaluate_cpp_cohort.py scripts/rank_cpp_cohort.py tests/test_cpp_scale_store.py
+          mypy --follow-imports=silent decbench/utils/cpp_scale_store.py scripts/run_cpp_scale.py scripts/export_cpp_scale.py
       - name: Evaluation and provenance regressions
         env:
           DECBENCH_NO_CACHE: '1'
           RUST_JOERN_LIBRARY: ${{ github.workspace }}/../rust-joern/target/release/librust_joern.so
         run: |
-          python -m pytest --no-cov tests/test_fission_call_scope.py tests/test_cpp_first_pc_locations.py tests/test_cpp_native_inputs.py tests/test_cpp_toolchain_probe.py tests/test_producer_validation.py tests/test_cpp_type_graph.py tests/test_cpp_review_contracts.py \
+          python -m pytest --no-cov tests/test_cpp_scale_store.py tests/test_fission_call_scope.py tests/test_cpp_first_pc_locations.py tests/test_cpp_native_inputs.py tests/test_cpp_toolchain_probe.py tests/test_producer_validation.py tests/test_cpp_type_graph.py tests/test_cpp_review_contracts.py \
             tests/test_cpp_ged_identity.py tests/test_cpp_ged_compilation_units.py \
             tests/test_recompiler_arch.py tests/test_byte_match_fixup_policy.py \
             tests/test_metric_function_identity.py \
