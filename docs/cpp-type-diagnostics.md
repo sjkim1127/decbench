@@ -84,3 +84,8 @@ An explicit future evidence transport is required for those evaluation lanes.
 Original metric algorithms, cache generations, decompiler outputs, matching,
 Rust-Joern, dataset flags, public overlays and website remain unchanged. This is
 diagnosis of frozen output, not a current-tool leaderboard or decompiler gain.
+
+The separate [native signature capture](cpp-signature-evidence.md) adds explicit
+formal/local roles and declared returns. Use the [diagnostic improvement
+loop](cpp-diagnostic-loop.md) to compare those joined captures before and after
+a change, retain fixed oracle facts and export investigation evidence.

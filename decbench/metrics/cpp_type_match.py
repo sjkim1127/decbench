@@ -272,9 +272,8 @@ class CppTypeMatchMetric(Metric):
         info, dwarf, pdb = oracle_context.info, oracle_context.dwarf, oracle_context.pdb
         oracle_index = oracle_context.index
         values, errors = {}, []
-        context = PreprocessedSourceContext(
-            tuple(Path(p) for p in kwargs.get("preprocessed_sources", [])), working.binary_name
-        )
+        source_paths = tuple(Path(p) for p in kwargs.get("preprocessed_sources", []))
+        context = PreprocessedSourceContext(source_paths, working.binary_name)
         try:
             for key, function in working.functions.items():
                 try:
@@ -286,7 +285,11 @@ class CppTypeMatchMetric(Metric):
                         )
                         evidence = list(
                             build_source_evidence(
-                                working.binary_path, function.name, function.address, gt, context
+                                working.binary_path,
+                                function.name,
+                                function.address,
+                                gt,
+                                context if source_paths else None,
                             ).variables
                         )
                     elif pdb is not None:

@@ -62,6 +62,21 @@ class RawFissionDecompiler(Decompiler):
             return None
         variables = [VariableInfo.model_validate(v) for v in record.get("variables", [])]
         mappings = [LineMapping.model_validate(m) for m in record.get("line_mappings_nir", [])]
+        for mapping in mappings:
+            if mapping.call_site is not None and (
+                mapping.defined_variables != []
+                or mapping.addresses != [mapping.call_site.instruction_address]
+            ):
+                raise ValueError("Fission call provenance must have an exclusive call-only scope")
+        # Legacy type matching treats any line-PC row as variable evidence.
+        # Keep call-only rows in their own transport channel to preserve that gate.
+        call_mappings = [m.model_dump(mode="json") for m in mappings if m.call_site is not None]
+        mappings = [m for m in mappings if m.call_site is None]
+        partial_shapes = [
+            {"variable_index": i, "name": v.name, "shape": raw["type_shape"]}
+            for i, (v, raw) in enumerate(zip(variables, record.get("variables", []), strict=True))
+            if isinstance(raw.get("type_shape"), dict)
+        ]
         name_counts = Counter(variable.name for variable in variables)
         for variable in variables:
             variable.line_numbers = sorted(
@@ -86,6 +101,9 @@ class RawFissionDecompiler(Decompiler):
                 "provenance_source": "fission_scalar_ssa",
                 "provenance_granularity": "variable_def_use_and_scoped_definition_lines",
                 "code_layer": "nir",
+                # Keep old producer serialization intact when the optional field is absent.
+                **({"recovered_type_shapes": partial_shapes} if partial_shapes else {}),
+                **({"call_mappings": call_mappings} if call_mappings else {}),
                 "output_contract": ProducerLanguageContract(
                     surface="c-like-pseudocode", declarations="partial", dialect="fission-nir-c"
                 ).model_dump(),

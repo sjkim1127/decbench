@@ -57,3 +57,7 @@ Unexpected evaluator errors surface instead of silently shrinking coverage.
 
 The output remains local research. No official score, ranking, producer gain,
 calling-ABI qualification, dataset readiness or execution parity follows from it.
+
+The [diagnostic improvement loop](cpp-diagnostic-loop.md) joins this capture to
+saved variable decisions, separates formal/local and void/nonvoid results, and
+reports fact/strict-agreement losses without combining them into a new ranking.

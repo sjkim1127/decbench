@@ -295,3 +295,36 @@ def test_valid_c_ast_keeps_c_grammar() -> None:
     tree = _parse_source(b"int f(int *restrict p) { return *p; }")
     assert not tree.root_node.has_error
     assert tree.language == _C_LANGUAGE
+
+
+def test_empty_cpp_sources_do_not_build_an_unselectable_dwarf_tu_index(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from decbench.models.metrics import MetricValue
+
+    real_evidence = cpp_metric.build_source_evidence
+    metric, result, oracle, closed = _evaluation(monkeypatch, tmp_path)
+    result.binary_path.write_bytes(b"placeholder for a controlled source-selection probe")
+    lookups: list[int] = []
+
+    def select(context: Any, binary: Path, name: str, address: int) -> None:
+        lookups.append(address)
+        return None
+
+    monkeypatch.setattr(cpp_metric.PreprocessedSourceContext, "_address_pinned_path", select)
+    monkeypatch.setattr(cpp_metric, "build_source_evidence", real_evidence)
+    monkeypatch.setattr(
+        metric, "_dwarf_rows", lambda *a: [{"identity": "source:0", "arg_index": 0}]
+    )
+    monkeypatch.setattr(metric, "compute_for_function", lambda *a, **kw: MetricValue(value=1.0))
+    empty = metric.compute_for_binary(result, oracle_context=oracle)
+    assert lookups == []
+    source = tmp_path / "source.ii"
+    source.write_text("int f(int x) { return x; }")
+    supplied = metric.compute_for_binary(
+        result, oracle_context=oracle, preprocessed_sources=[source]
+    )
+    assert lookups == [4096]
+    assert set(empty.function_results) == set(supplied.function_results) == {"f"}
+    assert empty.function_results["f"].value == supplied.function_results["f"].value == 1.0
+    assert closed == [True, True]

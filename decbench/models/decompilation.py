@@ -18,6 +18,14 @@ class ProducerLanguageContract(BaseModel):
     dialect: str | None = None
 
 
+class NativeCallSite(BaseModel):
+    """A producer's real CALL operation, verified against native bytes by consumers."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    instruction_address: int = Field(ge=0, strict=True)
+    pcode_sequence: int = Field(ge=0, strict=True)
+
+
 class LineMapping(BaseModel):
     """Maps decompiler output lines to source addresses."""
 
@@ -35,11 +43,17 @@ class LineMapping(BaseModel):
         ),
     )
 
+    call_site: NativeCallSite | None = Field(
+        default=None, description="Call-only scope; never grants variable occurrence PCs"
+    )
+
     @model_serializer(mode="wrap")
     def serialize_mapping(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data: dict[str, Any] = handler(self)
         if self.defined_variables is None:
             data.pop("defined_variables", None)
+        if self.call_site is None:
+            data.pop("call_site", None)
         return data
 
 
