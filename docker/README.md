@@ -94,9 +94,10 @@ revision explicitly. The image contains no credentials.
 
 ### Fission
 
-The raw Fission backend prefers `FISSION_BIN`, DecBench configuration, or
+The raw Fission backend prefers DecBench configuration, `FISSION_BIN`, or
 `fission_cli` / `fission` on `$PATH`, then falls back to the image built from
-`fission.Dockerfile`. `decompiler-build` resolves `FISSION_REF` to an immutable
+`fission.Dockerfile`; an explicit binary setting that is invalid is an error,
+not a reason to use the image. `decompiler-build` resolves `FISSION_REF` to an immutable
 source commit, and the image records it at `/opt/fission.rev`. At runtime the
 backend mounts only the input binary (and an optional read-only addresses file
 for multi-target scoped runs), disables networking, and captures the same JSON

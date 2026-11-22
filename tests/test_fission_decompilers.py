@@ -7,6 +7,7 @@ tests that skip gracefully when ``fission_cli`` is not available.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -18,8 +19,13 @@ import pytest
 
 import decbench.decompilers  # noqa: F401  (registers plugins)
 from decbench.decompilers.raw import common
-from decbench.decompilers.raw.fission_raw import _DEFAULT_REF, RawFissionDecompiler
+from decbench.decompilers.raw.fission_raw import (
+    _DEFAULT_REF,
+    FissionConfigError,
+    RawFissionDecompiler,
+)
 from decbench.decompilers.registry import DecompilerRegistry
+from decbench.decompilers.spec import load_versions_config
 
 TINY_C_SOURCE = """
 #include <stdio.h>
@@ -97,16 +103,50 @@ class TestRegistry:
         assert dec.get_version() is None
 
 
+FAKE_FISSION = """#!/usr/bin/env python3
+import os
+import sys
+
+if "--version" in sys.argv:
+    print(os.environ.get("FAKE_FISSION_VERSION", "fission_cli 0.3.0"))
+    raise SystemExit(0)
+log = os.environ.get("FAKE_FISSION_LOG")
+if log:
+    with open(log, "a") as stream:
+        stream.write(" ".join(sys.argv[1:]) + "\\n")
+print(os.environ.get("FAKE_FISSION_JSON", "[]"))
+"""
+
+
+def _fake_fission(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(FAKE_FISSION)
+    path.chmod(0o755)
+    return path
+
+
+@pytest.fixture
+def versions_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Point the decompiler config at a temp TOML; call the result to write it."""
+    path = tmp_path / "decompilers.toml"
+    monkeypatch.setenv("DECBENCH_DECOMPILERS_CONFIG", str(path))
+    monkeypatch.delenv("FISSION_BIN", raising=False)
+    monkeypatch.delenv("FISSION_VERSION", raising=False)
+
+    def write(text: str) -> None:
+        path.write_text(text)
+        load_versions_config.cache_clear()
+
+    load_versions_config.cache_clear()
+    yield write
+    load_versions_config.cache_clear()
+
+
 class TestVersionProvenance:
-    """A result names a Fission commit only when the binary provably came from it."""
+    """A result names a Fission commit only when the build itself pinned it."""
 
     @staticmethod
-    def _checkout_with_binary(tmp_path: Path, version_line: str = "fission_cli 0.3.0") -> Path:
-        git = shutil.which("git")
-        if git is None:
-            pytest.skip("git is not available")
-        repo = tmp_path / "fission"
-        repo.mkdir()
+    def _git(repo: Path, *args: str, date: str | None = None) -> str:
         env = {
             **os.environ,
             "GIT_AUTHOR_NAME": "t",
@@ -114,18 +154,11 @@ class TestVersionProvenance:
             "GIT_COMMITTER_NAME": "t",
             "GIT_COMMITTER_EMAIL": "t@example.invalid",
         }
-        subprocess.run([git, "init", "-q", str(repo)], check=True, env=env)
-        (repo / "src.rs").write_text("fn main() {}\n")
-        subprocess.run([git, "-C", str(repo), "add", "src.rs"], check=True, env=env)
-        subprocess.run([git, "-C", str(repo), "commit", "-q", "-m", "init"], check=True, env=env)
-        binary = repo / "target" / "release" / "fission_cli"
-        binary.parent.mkdir(parents=True)
-        binary.write_text(f"#!/bin/sh\necho '{version_line}'\n")
-        binary.chmod(0o755)
-        # Built after the commit and after HEAD last moved.
-        future = max((repo / ".git" / "HEAD").stat().st_mtime, binary.stat().st_mtime) + 60
-        os.utime(binary, (future, future))
-        return binary
+        if date:
+            env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = date
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], check=True, env=env, capture_output=True, text=True
+        ).stdout.strip()
 
     @staticmethod
     def _version(binary: Path, monkeypatch: pytest.MonkeyPatch) -> str | None:
@@ -133,44 +166,99 @@ class TestVersionProvenance:
         monkeypatch.delenv("FISSION_VERSION", raising=False)
         return RawFissionDecompiler().get_version()
 
-    @staticmethod
-    def _head(binary: Path) -> str:
-        return subprocess.run(
-            ["git", "-C", str(binary.parent), "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-
-    def test_a_clean_checkout_built_after_head_names_its_commit(
+    def test_checkout_moved_after_build_is_not_credited(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        binary = self._checkout_with_binary(tmp_path)
-        assert self._version(binary, monkeypatch) == f"git-{self._head(binary)} (fission 0.3.0)"
+        """Built at A, then the branch advances to B with an older timestamp."""
+        if shutil.which("git") is None:
+            pytest.skip("git is not available")
+        repo = tmp_path / "fission"
+        repo.mkdir()
+        self._git(repo, "init", "-q")
+        (repo / "src.rs").write_text("fn main() {}\n")
+        self._git(repo, "add", "src.rs")
+        self._git(repo, "commit", "-q", "-m", "A")
+        binary = _fake_fission(repo / "target" / "release" / "fission_cli")
+        future = binary.stat().st_mtime + 3600
+        os.utime(binary, (future, future))
+        (repo / "src.rs").write_text("fn main() { b(); }\n")
+        self._git(repo, "commit", "-q", "-am", "B", date="2001-01-01T00:00:00")
+        commit_b = self._git(repo, "rev-parse", "--short", "HEAD")
 
-    def test_uncommitted_changes_leave_the_build_unverified(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        binary = self._checkout_with_binary(tmp_path)
-        (binary.parents[2] / "src.rs").write_text("fn main() { edited(); }\n")
         version = self._version(binary, monkeypatch)
-        assert version is not None and version.startswith("0.3.0 (unverified build")
-        assert not version.startswith("git-")
 
-    def test_a_binary_older_than_head_is_not_credited_to_it(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        binary = self._checkout_with_binary(tmp_path)
-        os.utime(binary, (1_000_000, 1_000_000))
-        version = self._version(binary, monkeypatch)
-        assert version is not None and "unverified build" in version
+        assert version == "0.3.0 (unverified build)"
+        assert commit_b not in version
 
     def test_a_commit_the_binary_reports_wins(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        binary = self._checkout_with_binary(tmp_path, "fission_cli 0.3.0 (abc1234)")
-        (binary.parents[2] / "src.rs").write_text("fn main() { edited(); }\n")
+        binary = _fake_fission(tmp_path / "fission_cli")
+        monkeypatch.setenv("FAKE_FISSION_VERSION", "fission_cli 0.3.0 (abc1234)")
         assert self._version(binary, monkeypatch) == "git-abc1234 (fission 0.3.0)"
+
+    def test_a_hash_bound_manifest_names_the_commit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        binary = _fake_fission(tmp_path / "fission_cli")
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        manifest = tmp_path / "fission_cli.provenance.json"
+        manifest.write_text(json.dumps({"commit": "5073a1c63", "sha256": digest}))
+        assert self._version(binary, monkeypatch) == "git-5073a1c63 (fission 0.3.0)"
+
+    def test_a_stale_manifest_is_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        binary = _fake_fission(tmp_path / "fission_cli")
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        manifest = tmp_path / "fission_cli.provenance.json"
+        manifest.write_text(json.dumps({"commit": "5073a1c63", "sha256": digest}))
+        binary.write_text(FAKE_FISSION + "# rebuilt\n")
+        assert self._version(binary, monkeypatch) == "0.3.0 (unverified build)"
+
+
+class TestExplicitBinary:
+    """An explicit binary setting or version pin is honoured or fails, never swapped."""
+
+    def test_invalid_per_version_binary_does_not_fall_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, versions_config
+    ) -> None:
+        working = _fake_fission(tmp_path / "default" / "fission_cli")
+        versions_config(
+            f'[fission]\nbinary = "{working}"\n'
+            f'[fission.versions."0.3.0"]\nbinary = "{tmp_path / "missing"}"\n'
+        )
+        monkeypatch.setenv("FISSION_BIN", str(working))
+        dec = RawFissionDecompiler()
+        dec.requested_version = "0.3.0"
+
+        with pytest.raises(FissionConfigError, match=r"versions\.0\.3\.0\.binary"):
+            dec._select_path()
+        assert dec.is_available() is False
+
+    def test_version_pin_rejects_a_binary_reporting_another_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, versions_config
+    ) -> None:
+        binary = _fake_fission(tmp_path / "fission_cli")
+        versions_config(f'[fission.versions."0.2.0"]\nbinary = "{binary}"\n')
+        dec = RawFissionDecompiler()
+        dec.requested_version = "0.2.0"
+
+        with pytest.raises(FissionConfigError, match="reports 0.3.0"):
+            dec._select_path()
+        assert dec.get_version() is None
+
+    def test_version_pin_accepts_matching_version_or_commit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, versions_config
+    ) -> None:
+        binary = _fake_fission(tmp_path / "fission_cli")
+        monkeypatch.setenv("FAKE_FISSION_VERSION", "fission_cli 0.3.0 (5073a1c63)")
+        monkeypatch.setenv("FISSION_BIN", str(binary))
+        versions_config("")
+        for requested in ("0.3.0", "5073a1c", "git-5073a1c63dcf"):
+            dec = RawFissionDecompiler()
+            dec.requested_version = requested
+            assert dec._select_path() == ("native", binary)
 
 
 def _func_address(binary: Path, name: str) -> int:
@@ -223,7 +311,7 @@ raise SystemExit(2)
 
 
 @pytest.fixture
-def fake_docker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+def fake_docker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Install a deterministic Docker command double and disable native Fission."""
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
@@ -232,11 +320,20 @@ def fake_docker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     docker.chmod(0o755)
     log = tmp_path / "docker-argv.log"
     monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
-    monkeypatch.setenv("FISSION_BIN", str(tmp_path / "no-such-fission"))
+    monkeypatch.delenv("FISSION_BIN", raising=False)
+    monkeypatch.setenv("DECBENCH_DECOMPILERS_CONFIG", str(tmp_path / "no-config.toml"))
+    load_versions_config.cache_clear()
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name, *a, **k: None if name in {"fission_cli", "fission"} else real_which(name),
+    )
     monkeypatch.setenv("FAKE_DOCKER_LOG", str(log))
     monkeypatch.delenv("FISSION_IMAGE", raising=False)
     monkeypatch.delenv("FISSION_VERSION", raising=False)
-    return log
+    yield log
+    load_versions_config.cache_clear()
 
 
 def _docker_calls(log: Path) -> list[list[str]]:
@@ -255,7 +352,19 @@ class TestDockerInstall:
             "decbench.decompilers.raw.fission_raw._image_present", lambda image: False
         )
 
-        assert RawFissionDecompiler()._select_path() == ("none", None)
+        with pytest.raises(FissionConfigError, match="FISSION_BIN"):
+            RawFissionDecompiler()._select_path()
+
+    def test_explicit_bad_binary_does_not_fall_back_to_docker(
+        self, monkeypatch: pytest.MonkeyPatch, fake_docker: Path, tiny_binary: Path
+    ) -> None:
+        monkeypatch.setenv("FISSION_BIN", "/nonexistent/fission_cli")
+        dec = RawFissionDecompiler()
+
+        assert dec.is_available() is False
+        with pytest.raises(FissionConfigError, match="FISSION_BIN"):
+            dec.decompile_binary(tiny_binary, function_names={0x1000})
+        assert not any(call[0] == "run" for call in _docker_calls(fake_docker))
 
     def test_image_makes_backend_available_without_native_binary(self, fake_docker: Path) -> None:
         dec = RawFissionDecompiler()
@@ -286,6 +395,20 @@ class TestDockerInstall:
         assert RawFissionDecompiler().get_version() == "git-5073a1c"
         revision_call = next(call for call in _docker_calls(fake_docker) if "--entrypoint" in call)
         assert revision_call[-2:] == ["decbench/fission:latest", "/opt/fission.rev"]
+
+    def test_docker_version_pin_checks_the_image(
+        self, monkeypatch: pytest.MonkeyPatch, fake_docker: Path
+    ) -> None:
+        monkeypatch.setenv("FAKE_FISSION_JSON", "fission_cli 0.3.0")
+        monkeypatch.setenv("FAKE_DOCKER_REV", "5073a1c63")
+        for requested in ("0.3.0", "5073a1c"):
+            dec = RawFissionDecompiler()
+            dec.requested_version = requested
+            assert dec._select_path() == ("docker", None)
+        dec = RawFissionDecompiler()
+        dec.requested_version = "0.2.0"
+        with pytest.raises(FissionConfigError, match="decbench/fission:latest reports 0.3.0"):
+            dec._select_path()
 
     def test_build_image_pins_resolved_revision(
         self, monkeypatch: pytest.MonkeyPatch, fake_docker: Path
@@ -438,6 +561,63 @@ class TestDockerInstall:
         assert result.functions == {}
         assert result.decompiler.failed_functions == ["all"]
         assert "exited 7" in result.decompiler.extra["error"]
+
+
+class TestPayloadCache:
+    def test_replaced_binary_and_changed_settings_invalidate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, versions_config
+    ) -> None:
+        log = tmp_path / "fission.log"
+        monkeypatch.setenv("FISSION_BIN", str(_fake_fission(tmp_path / "fission_cli")))
+        monkeypatch.setenv("FAKE_FISSION_LOG", str(log))
+        monkeypatch.delenv("DECBENCH_FISSION_TIMEOUT_MS", raising=False)
+        binary = tmp_path / "sample"
+        binary.write_bytes(b"first build")
+        dec = RawFissionDecompiler()
+
+        def runs() -> int:
+            dec._run_decompile(binary, {0x1000})
+            return len(log.read_text().splitlines())
+
+        assert runs() == 1
+        assert runs() == 1
+        rebuilt = tmp_path / "sample.new"
+        rebuilt.write_bytes(b"second build")
+        os.replace(rebuilt, binary)
+        assert runs() == 2
+        monkeypatch.setenv("DECBENCH_FISSION_TIMEOUT_MS", "1234")
+        assert runs() == 3
+
+
+class TestMissingTargets:
+    def test_requested_functions_absent_from_output_are_failures(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        fake_docker: Path,
+        tiny_binary: Path,
+    ) -> None:
+        add_addr = _func_address(tiny_binary, "add_nums")
+        main_addr = _func_address(tiny_binary, "main")
+        monkeypatch.setenv(
+            "FAKE_FISSION_JSON",
+            json.dumps(
+                [
+                    {
+                        "name": "add_nums",
+                        "address": hex(add_addr),
+                        "code": "int add_nums(int a, int b) { return a + b; }",
+                        "fell_back": False,
+                    }
+                ]
+            ),
+        )
+
+        result = RawFissionDecompiler().decompile_binary(
+            tiny_binary, functions=[("add_nums", add_addr), ("main", main_addr)]
+        )
+
+        assert set(result.functions) == {"add_nums"}
+        assert result.decompiler.failed_functions == ["main"]
 
 
 class TestSmokeDecompile:

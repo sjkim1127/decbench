@@ -31,15 +31,18 @@ line-address evidence, while assignment definition rows populate
 ``FunctionDecompilation.line_mappings`` so Fission reaches the
 address-correspondence path in ``type_match`` cleanly.
 
-Locate the CLI via ``$FISSION_BIN`` (an explicit path), the DecBench
-decompiler configuration, or ``fission_cli`` / ``fission`` on ``$PATH``. When
-no native CLI resolves, the backend uses the image built by
-``decbench decompiler-build fission``.
+Locate the CLI via the DecBench decompiler configuration (per-version first),
+``$FISSION_BIN``, or ``fission_cli`` / ``fission`` on ``$PATH``. When no native
+CLI resolves, the backend uses the image built by
+``decbench decompiler-build fission``. An explicit binary setting that is not
+executable, or a ``fission@<version>`` whose executable reports another version,
+is an error rather than a fallback.
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -77,6 +80,9 @@ _IMAGE_REV_FILE = "/opt/fission.rev"
 _DEFAULT_REPO = "https://github.com/fission-systems/Fission.git"
 _DEFAULT_REF = "5073a1c63dcf15b57f4506671aa16ac1cc0c47b7"
 _SHA = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_SEMVER = re.compile(r"(\d+\.\d+\.\d+\S*)")
+_BUILT_FROM = re.compile(r"\(([0-9a-fA-F]{7,40})\)")
+_MANIFEST_SUFFIX = ".provenance.json"
 
 
 def _executable(path: Path) -> Path | None:
@@ -84,22 +90,30 @@ def _executable(path: Path) -> Path | None:
     return path if path.is_file() and os.access(path, os.X_OK) else None
 
 
-def _fission_bin(version: str | None = None) -> Path | None:
-    """Resolve native ``fission_cli`` with explicit configuration taking precedence."""
-    configured = os.environ.get("FISSION_BIN")
-    if configured:
-        return _executable(Path(configured))
+class FissionConfigError(RuntimeError):
+    """An explicit Fission setting names a binary that cannot be used."""
 
-    settings = [version_settings("fission", version)]
+
+def _fission_bin(version: str | None = None) -> Path | None:
+    """Resolve native ``fission_cli``; an explicit setting that is invalid raises.
+
+    Precedence: the per-version ``binary`` for ``fission@<version>``, then
+    ``$FISSION_BIN``, the default ``binary`` setting, and finally ``$PATH``.
+    """
     default = load_versions_config().get("fission")
-    if isinstance(default, dict):
-        settings.append(default)
-    for source in settings:
-        binary = source.get("binary") or source.get("bin")
-        if binary:
-            executable = _executable(Path(str(binary)).expanduser())
-            if executable is not None:
-                return executable
+    default = default if isinstance(default, dict) else {}
+    per_version = version_settings("fission", version)
+    explicit = [
+        (f"fission.versions.{version}.binary", per_version.get("binary") or per_version.get("bin")),
+        ("FISSION_BIN", os.environ.get("FISSION_BIN")),
+        ("fission.binary", default.get("binary") or default.get("bin")),
+    ]
+    for label, value in explicit:
+        if value:
+            executable = _executable(Path(str(value)).expanduser())
+            if executable is None:
+                raise FissionConfigError(f"{label}={value!r} is not an executable file")
+            return executable
 
     discovered = shutil.which("fission_cli") or shutil.which("fission")
     return Path(discovered) if discovered else None
@@ -141,57 +155,72 @@ def _resolve_resource_root(executable: Path | None, version: str | None = None) 
     return None
 
 
-def _git(cwd: Path, *args: str) -> str | None:
-    """Run ``git -C cwd args`` and return its stripped stdout, or ``None``."""
-    git = shutil.which("git")
-    if git is None:
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _manifest_commit(executable: Path) -> str | None:
+    """The commit named by a build manifest bound to ``executable``'s bytes.
+
+    ``<binary>.provenance.json`` holds ``{"commit": <sha>, "sha256": <hex>}``.
+    It counts only while the hash matches, so a rebuild that does not rewrite
+    the manifest is never credited to the old commit.
+    """
+    resolved = executable.resolve()
+    manifest = resolved.with_name(resolved.name + _MANIFEST_SUFFIX)
+    try:
+        data = json.loads(manifest.read_text())
+    except (OSError, ValueError):
         return None
+    if not isinstance(data, dict):
+        return None
+    commit = str(data.get("commit") or "")
+    digest = str(data.get("sha256") or "").lower()
+    if not _SHA.fullmatch(commit) or not digest:
+        return None
+    try:
+        return commit if _sha256(resolved) == digest else None
+    except OSError:
+        return None
+
+
+def _native_identity(executable: Path) -> tuple[str, str | None]:
+    """``(reported version, build-pinned commit or None)`` of a native CLI.
+
+    The commit comes only from the binary itself (``fission_cli 0.3.0
+    (abc1234)``) or a hash-bound build manifest, never from the checkout the
+    binary happens to sit in: the checkout can move without the binary.
+    """
+    out = ""
     try:
         process = subprocess.run(
-            [git, "-C", str(cwd), *args],
+            [str(executable), "--version"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=30,
         )
+        out = (process.stdout or process.stderr or "").strip()
     except Exception:  # noqa: BLE001
-        return None
-    if process.returncode != 0:
-        return None
-    return process.stdout.strip()
+        pass
+    semver = _SEMVER.search(out)
+    version = semver.group(1) if semver else (out.splitlines()[0] if out else "")
+    built = _BUILT_FROM.search(out)
+    return version, built.group(1) if built else _manifest_commit(executable)
 
 
-def _checkout_revision(executable: Path) -> tuple[str, bool] | None:
-    """The git checkout ``executable`` sits in, and whether it provably built it.
-
-    A ``target/release/fission_cli`` inside a Fission checkout is usually the
-    checkout's own build, but not always: the tree may have been switched to
-    another branch, pulled or edited after the build, and a result recorded
-    under the new ``HEAD`` would name code that never ran. The revision is
-    claimed only when the tree has no uncommitted changes to tracked files and
-    the binary is newer than both the ``HEAD`` commit and the last time
-    ``HEAD`` moved (a checkout or switch rewrites ``.git/HEAD``).
-
-    Returns ``(short_sha, matches)``, or ``None`` outside a git checkout.
-    """
-    where = executable.resolve().parent
-    revision = _git(where, "rev-parse", "--short", "HEAD")
-    if not revision:
-        return None
-    dirty = _git(where, "status", "--porcelain", "--untracked-files=no")
-    commit_time = _git(where, "log", "-1", "--format=%ct", "HEAD")
-    head_file = _git(where, "rev-parse", "--git-path", "HEAD")
-    if dirty is None or commit_time is None or head_file is None:
-        return revision, False
-    head_path = Path(head_file)
-    if not head_path.is_absolute():
-        head_path = where / head_path
-    try:
-        built = executable.resolve().stat().st_mtime
-        moved = head_path.stat().st_mtime
-    except OSError:
-        return revision, False
-    matches = not dirty and built >= max(float(commit_time), moved)
-    return revision, matches
+def _version_matches(requested: str, version: str, commit: str | None) -> bool:
+    """Whether a ``fission@<requested>`` spec names this version or commit."""
+    wanted = requested.removeprefix("git-").removeprefix("v").lower()
+    if version and version.removeprefix("v").lower() == wanted:
+        return True
+    if commit and _SHA.fullmatch(wanted):
+        built = commit.lower()
+        return built.startswith(wanted) or wanted.startswith(built)
+    return False
 
 
 def _docker_bin() -> str | None:
@@ -250,7 +279,9 @@ class RawFissionDecompiler(Decompiler):
 
     def __init__(self, config: DecompilerConfig | None = None):
         super().__init__(config)
-        self._payload_cache: dict[tuple[str, frozenset[int] | None], list[dict[str, Any]]] = {}
+        self._payload_cache: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        self._digests: dict[str, tuple[tuple[int, ...], str]] = {}
+        self._identities: dict[str, tuple[str, str | None]] = {}
         self._version_probed = False
         self._version_value: str | None = None
 
@@ -262,15 +293,51 @@ class RawFissionDecompiler(Decompiler):
         return _fission_bin(self.requested_version)
 
     def _select_path(self) -> tuple[str, Path | None]:
+        """The executable to run; raises :class:`FissionConfigError` rather than
+        substitute one that an explicit setting or version pin did not name."""
         executable = self._fission_bin()
         if executable is not None:
-            return "native", executable
-        if _image_present(self._image):
-            return "docker", None
-        return "none", None
+            selected: tuple[str, Path | None] = ("native", executable)
+        elif _image_present(self._image):
+            selected = ("docker", None)
+        else:
+            return "none", None
+        self._check_requested_version(*selected)
+        return selected
+
+    def _identity(self, mode: str, executable: Path | None) -> tuple[str, str | None]:
+        key = str(executable) if mode == "native" else f"docker:{self._image}"
+        if key not in self._identities:
+            if mode == "native" and executable is not None:
+                self._identities[key] = _native_identity(executable)
+            else:
+                revision = self._docker_output("--entrypoint", "cat", self._image, _IMAGE_REV_FILE)
+                reported = (
+                    self._docker_output(self._image, "--version") if self.requested_version else ""
+                )
+                semver = _SEMVER.search(reported)
+                self._identities[key] = (semver.group(1) if semver else "", revision or None)
+        return self._identities[key]
+
+    def _check_requested_version(self, mode: str, executable: Path | None) -> None:
+        requested = self.requested_version
+        if requested is None:
+            return
+        version, commit = self._identity(mode, executable)
+        if not _version_matches(requested, version, commit):
+            reported = version or "no version"
+            if commit:
+                reported += f" (git-{commit})"
+            raise FissionConfigError(
+                f"{self.id} requested, but {executable or self._image} reports {reported}"
+            )
 
     def is_available(self) -> bool:
-        return self._select_path()[0] != "none"
+        try:
+            return self._select_path()[0] != "none"
+        except FissionConfigError as error:
+            _l.warning("fission: %s", error)
+            return False
 
     @classmethod
     def build_image(cls, no_cache: bool = False) -> int:
@@ -311,74 +378,38 @@ class RawFissionDecompiler(Decompiler):
         configured = os.environ.get("FISSION_VERSION")
         if configured:
             return configured
-        mode, executable = self._select_path()
-        if mode == "docker":
-            return self._docker_version()
-        if executable is None:
-            return None
-
-        version = ""
-        built_from: str | None = None
         try:
-            p = subprocess.run(
-                [str(executable), "--version"],
+            mode, executable = self._select_path()
+        except FissionConfigError:
+            return None
+        if mode == "none":
+            return None
+        version, commit = self._identity(mode, executable)
+        if mode == "docker":
+            if commit:
+                return f"git-{commit}"
+            return self._image.rsplit(":", 1)[-1] if ":" in self._image else "unknown"
+        if commit:
+            suffix = f" (fission {version})" if version else ""
+            return f"git-{commit}{suffix}"
+        return f"{version or 'unknown'} (unverified build)"
+
+    def _docker_output(self, *args: str) -> str:
+        """Stdout of a networkless ``docker run --rm`` of ``args``, or ``""``."""
+        docker = _docker_bin()
+        if docker is None:
+            return ""
+        try:
+            process = subprocess.run(
+                [docker, "run", "--rm", "--network", "none", *args],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=120,
             )
-            out = (p.stdout or p.stderr or "").strip()
-            m = re.search(r"(\d+\.\d+\.\d+\S*)", out)
-            if m:
-                version = m.group(1)
-            elif out:
-                version = out.splitlines()[0]
-            # A build that names its own commit (`fission_cli 0.3.0 (abc1234)`)
-            # is the only source that cannot drift from the binary.
-            built = re.search(r"\(([0-9a-fA-F]{7,40})\)", out)
-            if built:
-                built_from = built.group(1)
-        except Exception:  # noqa: BLE001
-            pass
-        if built_from:
-            suffix = f" (fission {version})" if version else ""
-            return f"git-{built_from}{suffix}"
-
-        checkout = _checkout_revision(executable)
-        if checkout is None:
-            return version or self.requested_version or "unknown"
-        revision, matches = checkout
-        suffix = f" (fission {version})" if version else ""
-        if matches:
-            return f"git-{revision}{suffix}"
-        # The checkout around the binary is not proven to be what built it:
-        # say which checkout it sits in without claiming it as the revision.
-        return f"{version or 'unknown'} (unverified build in checkout git-{revision})"
-
-    def _docker_version(self) -> str:
-        docker = _docker_bin()
-        if docker:
-            try:
-                process = subprocess.run(
-                    [
-                        docker,
-                        "run",
-                        "--rm",
-                        "--network",
-                        "none",
-                        "--entrypoint",
-                        "cat",
-                        self._image,
-                        _IMAGE_REV_FILE,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if process.returncode == 0 and process.stdout.strip():
-                    return f"git-{process.stdout.strip()}"
-            except Exception as error:  # noqa: BLE001
-                _l.debug("fission: could not read image revision: %s", error)
-        return self._image.rsplit(":", 1)[-1] if ":" in self._image else "unknown"
+        except Exception as error:  # noqa: BLE001
+            _l.debug("fission: docker run %s failed: %s", " ".join(args), error)
+            return ""
+        return process.stdout.strip() if process.returncode == 0 else ""
 
     def discover_functions(self, binary_path: Path) -> list[tuple[str, int]]:
         """Enumerate (name, ELF-file-space addr) for the benchmarkable functions."""
@@ -507,6 +538,11 @@ class RawFissionDecompiler(Decompiler):
                 continue
             by_addr[addr] = rec
 
+        returned = set(by_addr)
+        for addr in sorted(requested_addrs):
+            if not common._addr_matches(addr, returned):
+                failed.append(explicit_addrs.get(addr) or f"sub_{addr:x}")
+
         enumerated: list[tuple[str, int]] = []
         for addr in sorted(by_addr):
             rec = by_addr[addr]
@@ -617,11 +653,14 @@ class RawFissionDecompiler(Decompiler):
             limit = os.environ.get("DECBENCH_FISSION_LIMIT", "30000")
             cmd += ["--all", "--limit", str(int(limit))]
 
-        fn_ms = os.environ.get("DECBENCH_FISSION_TIMEOUT_MS")
-        if fn_ms in (None, ""):
-            fn_ms = str(int(self.config.function_timeout_seconds * 1000))
-        cmd += ["--timeout-ms", str(int(fn_ms))]
+        cmd += ["--timeout-ms", str(self._function_timeout_ms())]
         return cmd
+
+    def _function_timeout_ms(self) -> int:
+        fn_ms = os.environ.get("DECBENCH_FISSION_TIMEOUT_MS")
+        if not fn_ms:
+            return int(self.config.function_timeout_seconds * 1000)
+        return int(fn_ms)
 
     @staticmethod
     def _kill_group(p: subprocess.Popen) -> None:
@@ -648,12 +687,14 @@ class RawFissionDecompiler(Decompiler):
     ) -> list[dict[str, Any]]:
         """Run ``fission_cli decomp ... --json`` and parse the JSON records.
 
-        Cached per (resolved path, target-set) so ``discover_functions`` +
-        ``decompile_binary`` don't pay for two loads.
+        Cached per (binary content, target set, backend settings) so
+        ``discover_functions`` + ``decompile_binary`` don't pay for two loads,
+        while a rebuilt input or a different Fission build never reuses JSON.
         """
         key = (
-            str(binary_path),
+            self._binary_fingerprint(binary_path),
             None if function_names is None else frozenset(function_names),
+            self._settings_key(),
         )
         if key in self._payload_cache:
             return self._payload_cache[key]
@@ -688,6 +729,37 @@ class RawFissionDecompiler(Decompiler):
         records = self._parse_records(stdout)
         self._payload_cache[key] = records
         return records
+
+    def _binary_fingerprint(self, binary_path: Path) -> tuple[str, str]:
+        """``(resolved path, sha256)``, rehashing only when ``stat`` changes."""
+        resolved = binary_path.resolve()
+        st = resolved.stat()
+        stamp = (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        cached = self._digests.get(str(resolved))
+        if cached is None or cached[0] != stamp:
+            cached = (stamp, _sha256(resolved))
+            self._digests[str(resolved)] = cached
+        return str(resolved), cached[1]
+
+    def _settings_key(self) -> tuple[Any, ...]:
+        """Everything besides the input that decides what Fission emits."""
+        mode, executable = self._select_path()
+        native: tuple[Any, ...] | None = None
+        if executable is not None:
+            resolved = executable.resolve()
+            st = resolved.stat()
+            root = _resolve_resource_root(executable, self.requested_version)
+            native = (str(resolved), st.st_size, st.st_mtime_ns, str(root))
+        return (
+            mode,
+            native,
+            self._image if mode == "docker" else None,
+            self.get_version(),
+            os.environ.get("DECBENCH_FISSION_LIMIT", "30000"),
+            self._function_timeout_ms(),
+            self._timeout_seconds(),
+            os.environ.get("FISSION_WORKING_DIR"),
+        )
 
     @staticmethod
     def _parse_records(stdout: str) -> list[dict[str, Any]]:

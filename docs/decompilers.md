@@ -42,7 +42,7 @@ Backends subclass the `Decompiler` ABC (`base.py`) and register via
   sample-set pass uses this runnable backend.
 - **Native or containerized Fission** (`raw/fission_raw.py`: `fission`):
   invokes `fission_cli`'s address-scoped/whole-binary JSON CLI natively when
-  `FISSION_BIN`, the decompiler config, or `$PATH` resolves it. Otherwise it runs
+  the decompiler config, `FISSION_BIN`, or `$PATH` resolves it. Otherwise it runs
   the immutable revision recorded in `decbench/fission:latest`, built from
   source with `decbench decompiler-build fission`.
 - **Dockerized** (`dockerized.py`: `reko`/`retdec`/`r2dec`): Reko and RetDec
@@ -408,20 +408,31 @@ decbench decompiler-build fission
 decbench list-decompilers
 ```
 
-The backend prefers a native executable (`FISSION_BIN`, the decompiler config,
-or `fission_cli` / `fission` on `$PATH`), then falls back to `decbench/fission:latest`.
+The backend prefers a native executable (a per-version `binary` in the
+decompiler config, `FISSION_BIN`, the default `binary`, or `fission_cli` /
+`fission` on `$PATH`), then falls back to `decbench/fission:latest`.
 `FISSION_RESOURCE_ROOT` (or `--resource-root` auto-detected next to the CLI)
 supplies the SLEIGH specs and signature packs, while the Docker image bundles
 them at `/opt/fission/share/fission` and records the built commit SHA at
-`/opt/fission.rev`. An invalid explicit `FISSION_BIN` is treated as a
-configuration error and never silently falls through to `$PATH`.
+`/opt/fission.rev`. An explicit binary setting that is not executable is a
+configuration error: the backend reports itself unavailable and never falls
+through to another binary, `$PATH`, or the image. A `fission@<version>` spec
+must also match what the executable reports (its `--version` semver, or a
+commit prefix of its pinned revision), or it fails the same way.
 
-A native binary is credited to a commit only when that is provable: the
-binary reports one in `--version`, or it sits in a git checkout with no
-uncommitted changes to tracked files and is newer than both the `HEAD` commit
-and the last time `HEAD` moved. Otherwise the version reads
-`<version> (unverified build in checkout git-<sha>)`, so a binary left over
-from another branch is never recorded as the checkout's revision. Set
+A native binary is credited to a commit only when the build pinned it: the
+binary reports one in `--version` (`fission_cli 0.3.0 (abc1234)`), or a
+`<binary>.provenance.json` manifest next to it names the commit and the
+binary's SHA-256, written at build time:
+
+```bash
+printf '{"commit":"%s","sha256":"%s"}\n' "$(git rev-parse HEAD)" \
+    "$(shasum -a 256 target/release/fission_cli | cut -d' ' -f1)" \
+    > target/release/fission_cli.provenance.json
+```
+
+Otherwise the version reads `<version> (unverified build)`; the surrounding
+git checkout is never consulted, since it can move without the binary. Set
 `FISSION_VERSION` to name it explicitly.
 
 ## 6. Testing your backend
